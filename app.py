@@ -31,32 +31,25 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', 'sq
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 
+
 # Initialize SQLAlchemy db object BEFORE defining models
 db = SQLAlchemy(app)
 
+# Get frontend URL from environment variable or fallback to localhost for development
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+# Allow CORS for both API routes and WebSocket connections
 CORS(app, resources={
     r"/api/*": {
-        "origins": [
-            "http://localhost:8501",
-            "http://127.0.0.1:8501",
-            "http://172.16.10.163:8501",
-            "http://localhost:3000",
-            "http://10.251.77.130:3000",
-            "*"
-        ],
+        "origins": [frontend_url],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
-socketio = SocketIO(app, cors_allowed_origins=[
-    "http://localhost:8501",
-    "http://127.0.0.1:8501",
-    "http://172.16.10.163:8501",
-    "http://localhost:3000",
-    "http://10.251.77.130:3000",
-    "*"
-])
+# Initialize SocketIO with CORS allowed origins
+socketio = SocketIO(app, cors_allowed_origins=[frontend_url])
+
 
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),

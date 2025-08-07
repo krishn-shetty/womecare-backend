@@ -22,6 +22,7 @@ import logging
 import json
 import jwt
 import functools
+from datetime import timezone
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -1012,9 +1013,9 @@ def get_location_route(user_id):
             },
             'bounds': {
                 'north': max(point['lat'] for point in route_points) if route_points else None,
-                'south': min(point['lat'] for point in route_points) if point['lat'] for point in route_points else None,
+                'south': min(point['lat'] for point in route_points) if route_points else None,
                 'east': max(point['lng'] for point in route_points) if route_points else None,
-                'west': min(point['lng'] for point in route_points) if point['lng'] for point in route_points else None
+                'west': min(point['lng'] for point in route_points) if route_points else None
             }
         }), 200
     except Exception as e:
@@ -1393,4 +1394,15 @@ def handle_socketio_error(e):
 @app.errorhandler(404)
 def not_found(error):
     logger.warning(f"404 error: {str(error)} - Requested URL: {request.url}")
-    return jsonify({'
+    return jsonify({'error': 'Resource not found', 'message': str(error)}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"500 error: {str(error)} - Requested URL: {request.url}")
+    return jsonify({'error': 'Internal server error', 'message': str(error)}), 500
+
+# Initialize database
+init_db()
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

@@ -36,19 +36,18 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 db = SQLAlchemy(app)
 
 # Get frontend URL from environment variable or fallback to localhost for development
+
+app = Flask(__name__)
+
+# ✅ Get frontend URL from env or fallback to localhost
 frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-# Enable CORS
-CORS(app, resources={
-    r"/*": {
-        "origins": frontend_url,
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
+# ✅ Enable CORS for all routes with required headers
+CORS(app, origins=[frontend_url], supports_credentials=True)
 
-# Enable Socket.IO CORS
-socketio = SocketIO(app, cors_allowed_origins=frontend_url)
+# ✅ Enable CORS for Socket.IO
+socketio = SocketIO(app, cors_allowed_origins=[frontend_url])
+
 
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),

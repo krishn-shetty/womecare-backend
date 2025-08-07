@@ -1,9 +1,11 @@
 import eventlet
-eventlet.monkey_patch()  # Apply monkey patching before any imports
+eventlet.monkey_patch()
 
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta, UTC
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit
+from datetime import datetime, timedelta
 from sqlalchemy.exc import IntegrityError
 import os
 from dotenv import load_dotenv
@@ -18,9 +20,8 @@ import requests
 from geopy.geocoders import Nominatim
 import logging
 import json
-from flask_socketio import SocketIO, emit
-from flask_cors import CORS
 import jwt
+import functools
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,34 +29,38 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', 'sqlite:///womecare.db')
+
+# Configuration
+required_env_vars = ['SQLALCHEMY_DATABASE_URI', 'SECRET_KEY', 'FRONTEND_URL']
+for var in required_env_vars:
+    if not os.getenv(var):
+        raise ValueError(f"Missing required environment variable: {var}")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+frontend_url = os.getenv('FRONTEND_URL')
 
-# Initialize SQLAlchemy db object
+# Initialize extensions
 db = SQLAlchemy(app)
+CORS(app, resources={r"/api/*": {"origins": [frontend_url, "https://womecare-frontend-5ve6.vercel.app"], "supports_credentials": True}})
+socketio = SocketIO(app, cors_allowed_origins=[frontend_url, "https://womecare-frontend-5ve6.vercel.app"], async_mode='eventlet')
 
-# Get frontend URL from environment variable or fallback to localhost
-frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-CORS(app, origins=[frontend_url, "https://womencare-frontend-5ve6.vercel.app"], supports_credentials=True)
-socketio = SocketIO(app, cors_allowed_origins=[frontend_url, "https://womencare-frontend-5ve6.vercel.app"])
-
+# Twilio and Email configuration
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),
     'auth_token': os.getenv('TWILIO_AUTH_TOKEN'),
     'phone_number': os.getenv('TWILIO_PHONE_NUMBER')
 }
-
 EMAIL_CONFIG = {
     'user': os.getenv('EMAIL_USER'),
     'password': os.getenv('EMAIL_PASSWORD'),
     'server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
     'port': int(os.getenv('SMTP_PORT', 587))
 }
-
 Maps_API_KEY = os.getenv('Maps_API_KEY')
 
-# --- Database Models ---
+# Database Models
 class User(db.Model):
     __tablename__ = 'user'
     id = db.Column(db.Integer, primary_key=True)
@@ -65,7 +70,7 @@ class User(db.Model):
     age = db.Column(db.Integer)
     blood_group = db.Column(db.String(5))
     medical_conditions = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 class EmergencyContact(db.Model):
     __tablename__ = 'emergency_contact'
@@ -99,7 +104,7 @@ class LocationLog(db.Model):
     speed = db.Column(db.Float)
     address = db.Column(db.String(500))
     location_source = db.Column(db.String(50))
-    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     is_high_accuracy = db.Column(db.Boolean)
 
 class MedicationReminder(db.Model):
@@ -138,7 +143,7 @@ class SOSAlert(db.Model):
     message = db.Column(db.Text)
     status = db.Column(db.String(20), default='active')
     additional_info = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     resolved_at = db.Column(db.DateTime)
     resolution_notes = db.Column(db.Text)
 
@@ -149,7 +154,7 @@ class PregnancyTracker(db.Model):
     last_menstrual_period = db.Column(db.Date, nullable=False)
     due_date = db.Column(db.Date, nullable=False)
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 class MaternityGuide(db.Model):
     __tablename__ = 'maternity_guide'
@@ -168,7 +173,7 @@ class PregnancySymptom(db.Model):
     symptom_name = db.Column(db.String(100), nullable=False)
     severity = db.Column(db.Integer)
     notes = db.Column(db.Text)
-    log_date = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    log_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 class KickCount(db.Model):
     __tablename__ = 'kick_count'
@@ -183,7 +188,7 @@ class Contraction(db.Model):
     __tablename__ = 'contraction'
     id = db.Column(db.Integer, primary_key=True)
     pregnancy_id = db.Column(db.Integer, db.ForeignKey('pregnancy_tracker.id'), nullable=False)
-    start_time = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    start_time = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     duration_seconds = db.Column(db.Integer)
     frequency_minutes = db.Column(db.Integer)
 
@@ -194,8 +199,8 @@ class CommunityPost(db.Model):
     title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
     category = db.Column(db.String(50))
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
-    updated_at = db.Column(db.DateTime, onupdate=lambda: datetime.now(UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, onupdate=lambda: datetime.now(timezone.utc))
 
 class CommunityComment(db.Model):
     __tablename__ = 'community_comment'
@@ -203,11 +208,10 @@ class CommunityComment(db.Model):
     post_id = db.Column(db.Integer, db.ForeignKey('community_post.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-# --- Helper Functions ---
+# Helper Functions
 def populate_maternity_guide():
-    """Populates the database with sample maternity guide data."""
     with app.app_context():
         if db.session.query(MaternityGuide).count() == 0:
             logger.info("Populating Maternity Guide data...")
@@ -226,7 +230,6 @@ def populate_maternity_guide():
             logger.info("Maternity Guide data populated.")
 
 def init_db():
-    """Initialize database and populate maternity guide."""
     with app.app_context():
         try:
             db.create_all()
@@ -237,10 +240,8 @@ def init_db():
             raise
 
 def validate_location_data(data):
-    """Validate location data for latitude and longitude."""
     if not all(key in data for key in ['latitude', 'longitude']):
         raise ValueError('Missing required fields: latitude, longitude')
-
     try:
         latitude = float(data['latitude'])
         longitude = float(data['longitude'])
@@ -250,7 +251,6 @@ def validate_location_data(data):
             raise ValueError('Invalid coordinates: 0,0')
     except (ValueError, TypeError):
         raise ValueError('Invalid coordinate format')
-
     return {
         'latitude': latitude,
         'longitude': longitude,
@@ -263,7 +263,6 @@ def validate_location_data(data):
     }
 
 def get_detailed_address(latitude, longitude):
-    """Get detailed address from coordinates using Google Maps or Nominatim."""
     try:
         if Maps_API_KEY:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -281,7 +280,6 @@ def get_detailed_address(latitude, longitude):
                     'place_id': result.get('place_id'),
                     'accuracy': 'HIGH' if result.get('geometry', {}).get('location_type') == 'ROOFTOP' else 'MEDIUM'
                 }
-
         geolocator = Nominatim(user_agent="womecare_app", timeout=10)
         location = geolocator.reverse(f"{latitude}, {longitude}", exactly_one=True)
         if location:
@@ -297,7 +295,6 @@ def get_detailed_address(latitude, longitude):
         return None
 
 def get_accuracy_description(accuracy):
-    """Get a description of location accuracy."""
     if accuracy is None:
         return "Unknown"
     thresholds = [
@@ -313,7 +310,6 @@ def get_accuracy_description(accuracy):
     return f"Very Poor ({accuracy:.0f}m)"
 
 def create_location_map(latitude, longitude, user_name, accuracy=None):
-    """Create a Folium map for emergency location."""
     try:
         map_obj = folium.Map(
             location=[latitude, longitude],
@@ -324,7 +320,6 @@ def create_location_map(latitude, longitude, user_name, accuracy=None):
             popup=f"{user_name}'s Emergency Location<br>Accuracy: {accuracy}m" if accuracy else f"{user_name}'s Emergency Location",
             icon=folium.Icon(color='red', icon='exclamation-triangle', prefix='fa')
         ).add_to(map_obj)
-
         if accuracy:
             folium.Circle(
                 location=[latitude, longitude],
@@ -333,33 +328,36 @@ def create_location_map(latitude, longitude, user_name, accuracy=None):
                 fill=True,
                 fillOpacity=0.2
             ).add_to(map_obj)
-
-        map_filename = f"emergency_location_{user_name}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.html"
+        map_filename = f"emergency_location_{user_name}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.html"
         map_path = os.path.join('/tmp', map_filename)
         map_obj.save(map_path)
+        logger.info(f"Map saved to {map_path}")
         return map_path
     except Exception as e:
         logger.error(f"Map creation error: {str(e)}")
         return None
+    finally:
+        if 'map_path' in locals() and os.path.exists(map_path):
+            try:
+                os.remove(map_path)
+                logger.info(f"Cleaned up map file: {map_path}")
+            except Exception as e:
+                logger.error(f"Failed to clean up map file {map_path}: {str(e)}")
 
 def send_emergency_email(email, user_name, message, latitude=None, longitude=None, accuracy=None):
-    """Send emergency email with location details."""
     try:
         if not all([EMAIL_CONFIG['user'], EMAIL_CONFIG['password']]):
             logger.warning("Email credentials not configured")
             return
-
         msg = MIMEMultipart('alternative')
         msg['Subject'] = f'🚨 EMERGENCY ALERT - {user_name}'
         msg['From'] = EMAIL_CONFIG['user']
         msg['To'] = email
-
-        current_time = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+        current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         address_info = get_detailed_address(latitude, longitude)['full_address'] if latitude and longitude else ""
         maps_link = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" if latitude and longitude else ""
         maps_directions = f"https://www.google.com/maps/dir/?api=1&destination={latitude},{longitude}" if latitude and longitude else ""
         accuracy_info = f"Accuracy: {get_accuracy_description(accuracy)}" if accuracy else ""
-
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -404,7 +402,6 @@ def send_emergency_email(email, user_name, message, latitude=None, longitude=Non
         </body>
         </html>
         """
-
         text_content = f"""
         EMERGENCY ALERT: {user_name}
         Time: {current_time}
@@ -416,10 +413,8 @@ def send_emergency_email(email, user_name, message, latitude=None, longitude=Non
         {accuracy_info}
         {maps_link}
         """
-
         msg.attach(MIMEText(text_content, 'plain'))
         msg.attach(MIMEText(html_content, 'html'))
-
         map_path = create_location_map(latitude, longitude, user_name, accuracy) if latitude and longitude else None
         if map_path and os.path.exists(map_path):
             with open(map_path, 'rb') as attachment:
@@ -428,26 +423,21 @@ def send_emergency_email(email, user_name, message, latitude=None, longitude=Non
             encoders.encode_base64(part)
             part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(map_path)}')
             msg.attach(part)
-
         with smtplib.SMTP(EMAIL_CONFIG['server'], EMAIL_CONFIG['port']) as server:
             server.starttls()
             server.login(EMAIL_CONFIG['user'], EMAIL_CONFIG['password'])
             server.send_message(msg)
-
         logger.info(f"Emergency email sent to {email}")
     except Exception as e:
         logger.error(f"Failed to send email to {email}: {str(e)}")
 
 def send_emergency_sms(phone, user_name, message, latitude=None, longitude=None, accuracy=None):
-    """Send emergency SMS with location details."""
     try:
         if not all(TWILIO_CONFIG.values()):
             logger.warning("Twilio credentials not configured")
             return
-
         location_text = f"\nLocation: https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" if latitude and longitude else ""
         sms_message = f'EMERGENCY: {user_name} needs help! {message}{location_text}'
-
         client = Client(TWILIO_CONFIG['account_sid'], TWILIO_CONFIG['auth_token'])
         client.messages.create(
             body=sms_message,
@@ -458,7 +448,33 @@ def send_emergency_sms(phone, user_name, message, latitude=None, longitude=None,
     except Exception as e:
         logger.error(f"Failed to send SMS to {phone}: {str(e)}")
 
-# --- API Endpoints ---
+# JWT Authentication Middleware
+def token_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].replace('Bearer ', '')
+        if not token:
+            logger.warning("Missing token in request")
+            return jsonify({'error': 'Token is missing'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            current_user = db.session.get(User, data['user_id'])
+            if not current_user:
+                logger.warning(f"User not found for token: {data['user_id']}")
+                return jsonify({'error': 'User not found'}), 401
+            request.current_user = current_user
+        except jwt.ExpiredSignatureError:
+            logger.warning("Expired token")
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            logger.warning("Invalid token")
+            return jsonify({'error': 'Invalid token'}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# API Endpoints
 @app.route('/', methods=['GET'])
 def index():
     return "Welcome to the Womecare Backend API! Please refer to the documentation for available endpoints.", 200
@@ -468,43 +484,30 @@ def login_user():
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/login")
         return make_response('', 200)
-
     try:
         data = request.get_json()
         email = data.get('email')
         phone = data.get('phone')
-
         if not email or not phone:
             return jsonify({'error': 'Email and phone are required'}), 400
-
-        with app.app_context():
-            user = db.session.query(User).filter_by(email=email, phone=phone).first()
-
+        user = db.session.query(User).filter_by(email=email, phone=phone).first()
         if not user:
             return jsonify({'error': 'Invalid credentials'}), 401
-
         token_payload = {
             'user_id': user.id,
-            'exp': datetime.now(UTC) + timedelta(days=1)
+            'exp': datetime.now(timezone.utc) + timedelta(days=1)
         }
         token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
-
         logger.info(f"User logged in: ID {user.id}, Email {user.email}")
         return jsonify({
             'message': 'Login successful',
             'token': token,
             'user_id': user.id,
             'user': {
-                'id': user.id,
-                'name': user.name,
-                'email': user.email,
-                'phone': user.phone,
-                'age': user.age,
-                'blood_group': user.blood_group,
-                'medical_conditions': user.medical_conditions
+                'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
+                'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
             }
         }), 200
-
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
         return jsonify({'error': f'An error occurred during login: {str(e)}'}), 500
@@ -514,41 +517,36 @@ def create_user():
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/users")
         return make_response('', 200)
-
     try:
         data = request.get_json()
         if not data or not all(key in data for key in ['name', 'email', 'phone']):
             logger.warning(f"Invalid user creation request: {data}")
             return jsonify({'error': 'Missing required fields: name, email, phone'}), 400
-
-        with app.app_context():
-            user = User(
-                name=data['name'],
-                email=data['email'],
-                phone=data['phone'],
-                age=data.get('age'),
-                blood_group=data.get('blood_group'),
-                medical_conditions=data.get('medical_conditions')
-            )
-            db.session.add(user)
-            db.session.commit()
-
-            token_payload = {
-                'user_id': user.id,
-                'exp': datetime.now(UTC) + timedelta(days=1)
+        user = User(
+            name=data['name'],
+            email=data['email'],
+            phone=data['phone'],
+            age=data.get('age'),
+            blood_group=data.get('blood_group'),
+            medical_conditions=data.get('medical_conditions')
+        )
+        db.session.add(user)
+        db.session.commit()
+        token_payload = {
+            'user_id': user.id,
+            'exp': datetime.now(timezone.utc) + timedelta(days=1)
+        }
+        token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+        logger.info(f"User created: ID {user.id}, Email {user.email}")
+        return jsonify({
+            'message': 'User created successfully',
+            'user_id': user.id,
+            'token': token,
+            'user': {
+                'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
+                'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
             }
-            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
-
-            logger.info(f"User created: ID {user.id}, Email {user.email}")
-            return jsonify({
-                'message': 'User created successfully',
-                'user_id': user.id,
-                'token': token,
-                'user': {
-                    'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
-                    'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
-                }
-            }), 201
+        }), 201
     except IntegrityError:
         db.session.rollback()
         logger.warning(f"Email already exists: {data.get('email')}")
@@ -561,8 +559,7 @@ def create_user():
 @app.route('/api/users/email/<string:email>', methods=['GET'])
 def check_email(email):
     try:
-        with app.app_context():
-            user = db.session.query(User).filter_by(email=email).first()
+        user = db.session.query(User).filter_by(email=email).first()
         logger.info(f"Email check: {email}, exists: {bool(user)}")
         return jsonify({'exists': bool(user)}), 200
     except Exception as e:
@@ -570,54 +567,38 @@ def check_email(email):
         return jsonify({'error': f'Error checking email: {str(e)}'}), 500
 
 @app.route('/api/users/<int:user_id>', methods=['GET', 'PUT'])
+@token_required
 def manage_user(user_id):
     try:
-        with app.app_context():
-            user = db.session.get(User, user_id)
+        user = db.session.get(User, user_id)
         if not user:
             logger.warning(f"User not found: ID {user_id}")
             return jsonify({'error': 'User not found'}), 404
-
         if request.method == 'GET':
             logger.info(f"User fetched: ID {user_id}")
             return jsonify({
-                'id': user.id,
-                'name': user.name,
-                'email': user.email,
-                'phone': user.phone,
-                'age': user.age,
-                'blood_group': user.blood_group,
-                'medical_conditions': user.medical_conditions
+                'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
+                'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
             }), 200
-
         if request.method == 'PUT':
             data = request.get_json()
             if not data:
                 return jsonify({'error': 'No data provided for update'}), 400
-
-            with app.app_context():
-                user.name = data.get('name', user.name)
-                user.email = data.get('email', user.email)
-                user.phone = data.get('phone', user.phone)
-                user.age = data.get('age', user.age)
-                user.blood_group = data.get('blood_group', user.blood_group)
-                user.medical_conditions = data.get('medical_conditions', user.medical_conditions)
-                db.session.commit()
-
+            user.name = data.get('name', user.name)
+            user.email = data.get('email', user.email)
+            user.phone = data.get('phone', user.phone)
+            user.age = data.get('age', user.age)
+            user.blood_group = data.get('blood_group', user.blood_group)
+            user.medical_conditions = data.get('medical_conditions', user.medical_conditions)
+            db.session.commit()
             logger.info(f"User updated: ID {user_id}")
             return jsonify({
                 'message': 'User profile updated successfully',
                 'user': {
-                    'id': user.id,
-                    'name': user.name,
-                    'email': user.email,
-                    'phone': user.phone,
-                    'age': user.age,
-                    'blood_group': user.blood_group,
-                    'medical_conditions': user.medical_conditions
+                    'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
+                    'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
                 }
             }), 200
-
     except IntegrityError:
         db.session.rollback()
         logger.warning(f"Email already exists during update: {request.get_json().get('email')}")
@@ -628,17 +609,15 @@ def manage_user(user_id):
         return jsonify({'error': f'Error managing user: {str(e)}'}), 500
 
 @app.route('/api/emergency-contacts/<int:user_id>/<int:contact_id>', methods=['DELETE'])
+@token_required
 def delete_emergency_contact(user_id, contact_id):
     try:
-        with app.app_context():
-            contact = db.session.query(EmergencyContact).filter_by(id=contact_id, user_id=user_id).first()
+        contact = db.session.query(EmergencyContact).filter_by(id=contact_id, user_id=user_id).first()
         if not contact:
             logger.warning(f"Emergency contact not found: ID {contact_id}, User {user_id}")
             return jsonify({'error': 'Emergency contact not found'}), 404
-
-        with app.app_context():
-            db.session.delete(contact)
-            db.session.commit()
+        db.session.delete(contact)
+        db.session.commit()
         logger.info(f"Emergency contact deleted: ID {contact_id} for user {user_id}")
         return jsonify({'message': 'Emergency contact deleted successfully'}), 200
     except Exception as e:
@@ -647,57 +626,46 @@ def delete_emergency_contact(user_id, contact_id):
         return jsonify({'error': f'Failed to delete contact: {str(e)}'}), 500
 
 @app.route('/api/emergency-contacts/<int:user_id>', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
 def manage_emergency_contacts(user_id):
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/emergency-contacts")
         return make_response('', 200)
-
     try:
-        with app.app_context():
-            user = db.session.get(User, user_id)
+        user = db.session.get(User, user_id)
         if not user:
             logger.warning(f"User not found for emergency contacts: ID {user_id}")
             return jsonify({'error': 'User not found'}), 404
-
         if request.method == 'GET':
-            with app.app_context():
-                contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all()
+            contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all()
             logger.info(f"Fetched {len(contacts)} emergency contacts for user {user_id}")
             return jsonify({
                 'contacts': [{
-                    'id': contact.id,
-                    'name': contact.name,
-                    'relationship': contact.relationship,
-                    'phone': contact.phone,
-                    'email': contact.email,
-                    'is_primary': contact.is_primary
+                    'id': contact.id, 'name': contact.name, 'relationship': contact.relationship,
+                    'phone': contact.phone, 'email': contact.email, 'is_primary': contact.is_primary
                 } for contact in contacts],
                 'count': len(contacts)
             }), 200
-
         if request.method == 'POST':
             data = request.get_json()
             if not data or not all(key in data for key in ['name', 'phone']):
                 logger.warning(f"Invalid emergency contact data: {data}")
                 return jsonify({'error': 'Missing required fields: name, phone'}), 400
-
-            with app.app_context():
-                contact = EmergencyContact(
-                    user_id=user_id,
-                    name=data['name'],
-                    phone=data['phone'],
-                    email=data.get('email'),
-                    relationship=data.get('relationship'),
-                    is_primary=data.get('is_primary', False)
-                )
-                db.session.add(contact)
-                db.session.commit()
+            contact = EmergencyContact(
+                user_id=user_id,
+                name=data['name'],
+                phone=data['phone'],
+                email=data.get('email'),
+                relationship=data.get('relationship'),
+                is_primary=data.get('is_primary', False)
+            )
+            db.session.add(contact)
+            db.session.commit()
             logger.info(f"Emergency contact added for user {user_id}: {contact.name}")
             return jsonify({
                 'message': 'Emergency contact added successfully',
                 'contact_id': contact.id
             }), 201
-
     except IntegrityError:
         db.session.rollback()
         logger.warning(f"Duplicate emergency contact data for user {user_id}")
@@ -708,56 +676,49 @@ def manage_emergency_contacts(user_id):
         return jsonify({'error': f'Error managing emergency contact: {str(e)}'}), 500
 
 @app.route('/api/dashboard/<int:user_id>', methods=['GET', 'OPTIONS'])
+@token_required
 def get_dashboard(user_id):
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/dashboard")
         return make_response('', 200)
-
     try:
-        with app.app_context():
-            user = db.session.get(User, user_id)
+        user = db.session.get(User, user_id)
         if not user:
             logger.warning(f"User not found for dashboard: ID {user_id}")
             return jsonify({'error': 'User not found'}), 404
-
-        with app.app_context():
-            contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all()
-            contacts_data = [{
-                'id': contact.id, 'name': contact.name, 'relationship': contact.relationship,
-                'phone': contact.phone, 'email': contact.email, 'is_primary': contact.is_primary
-            } for contact in contacts]
-
-            locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
-                LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=24)
-            ).order_by(LocationLog.timestamp.desc()).limit(10).all()
-            locations_data = [{
-                'id': loc.id, 'latitude': loc.latitude, 'longitude': loc.longitude, 'accuracy': loc.accuracy,
-                'accuracy_description': get_accuracy_description(loc.accuracy), 'address': loc.address,
-                'timestamp': loc.timestamp.isoformat()
-            } for loc in locations]
-
-            sos_alerts = db.session.query(SOSAlert).filter_by(user_id=user_id).filter(
-                SOSAlert.created_at >= datetime.now(UTC) - timedelta(days=7)
-            ).order_by(SOSAlert.created_at.desc()).limit(5).all()
-            sos_data = [{
-                'id': alert.id, 'alert_type': alert.alert_type, 'message': alert.message, 'status': alert.status,
-                'latitude': alert.latitude, 'longitude': alert.longitude, 'accuracy': alert.accuracy,
-                'created_at': alert.created_at.isoformat(),
-                'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None
-            } for alert in sos_alerts]
-
-            pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
-            pregnancy_data = None
-            if pregnancy:
-                days_pregnant = (datetime.now(UTC).date() - pregnancy.last_menstrual_period).days
-                current_week = (days_pregnant // 7) + 1
-                pregnancy_data = {
-                    'is_tracking': True,
-                    'due_date': pregnancy.due_date.isoformat(),
-                    'current_week': current_week,
-                    'trimester': (current_week - 1) // 13 + 1
-                }
-
+        contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all()
+        contacts_data = [{
+            'id': contact.id, 'name': contact.name, 'relationship': contact.relationship,
+            'phone': contact.phone, 'email': contact.email, 'is_primary': contact.is_primary
+        } for contact in contacts]
+        locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
+            LocationLog.timestamp >= datetime.now(timezone.utc) - timedelta(hours=24)
+        ).order_by(LocationLog.timestamp.desc()).limit(10).all()
+        locations_data = [{
+            'id': loc.id, 'latitude': loc.latitude, 'longitude': loc.longitude, 'accuracy': loc.accuracy,
+            'accuracy_description': get_accuracy_description(loc.accuracy), 'address': loc.address,
+            'timestamp': loc.timestamp.isoformat()
+        } for loc in locations]
+        sos_alerts = db.session.query(SOSAlert).filter_by(user_id=user_id).filter(
+            SOSAlert.created_at >= datetime.now(timezone.utc) - timedelta(days=7)
+        ).order_by(SOSAlert.created_at.desc()).limit(5).all()
+        sos_data = [{
+            'id': alert.id, 'alert_type': alert.alert_type, 'message': alert.message, 'status': alert.status,
+            'latitude': alert.latitude, 'longitude': alert.longitude, 'accuracy': alert.accuracy,
+            'created_at': alert.created_at.isoformat(),
+            'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None
+        } for alert in sos_alerts]
+        pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
+        pregnancy_data = None
+        if pregnancy:
+            days_pregnant = (datetime.now(timezone.utc).date() - pregnancy.last_menstrual_period).days
+            current_week = (days_pregnant // 7) + 1
+            pregnancy_data = {
+                'is_tracking': True,
+                'due_date': pregnancy.due_date.isoformat(),
+                'current_week': current_week,
+                'trimester': (current_week - 1) // 13 + 1
+            }
         logger.info(f"Dashboard data fetched for user {user_id}")
         return jsonify({
             'user': {
@@ -769,31 +730,27 @@ def get_dashboard(user_id):
             'sos_alerts': sos_data,
             'pregnancy_tracker': pregnancy_data
         }), 200
-
     except Exception as e:
         logger.error(f"Dashboard error for user {user_id}: {str(e)}")
         return jsonify({'error': f'Error fetching dashboard data: {str(e)}'}), 500
 
 @app.route('/api/location/<int:user_id>/live', methods=['POST'])
+@token_required
 def update_live_location(user_id):
     try:
         data = request.get_json()
         if not data:
             logger.warning("No location data provided")
             return jsonify({'error': 'No location data provided'}), 400
-
         location_data = validate_location_data(data)
         address = get_detailed_address(location_data['latitude'], location_data['longitude'])
-
-        with app.app_context():
-            location = LocationLog(
-                user_id=user_id,
-                address=address['full_address'] if address else None,
-                **location_data
-            )
-            db.session.add(location)
-            db.session.commit()
-
+        location = LocationLog(
+            user_id=user_id,
+            address=address['full_address'] if address else None,
+            **location_data
+        )
+        db.session.add(location)
+        db.session.commit()
         logger.info(f"Location updated for user {user_id}")
         return jsonify({
             'message': 'Location updated',
@@ -820,12 +777,12 @@ def update_live_location(user_id):
         return jsonify({'error': f'Error updating location: {str(e)}'}), 500
 
 @app.route('/api/location/<int:user_id>/track', methods=['POST'])
+@token_required
 def start_location_tracking(user_id):
     try:
         data = request.get_json() or {}
         tracking_interval = data.get('interval', 30)
         high_accuracy = data.get('high_accuracy', True)
-
         logger.info(f"Location tracking started for user {user_id}")
         return jsonify({
             'message': 'Location tracking started',
@@ -849,15 +806,14 @@ def start_location_tracking(user_id):
         return jsonify({'error': f'Error starting location tracking: {str(e)}'}), 500
 
 @app.route('/api/sos/<int:user_id>', methods=['POST'])
+@token_required
 def trigger_sos(user_id):
     try:
         data = request.get_json() or {}
-        with app.app_context():
-            user = db.session.get(User, user_id)
+        user = db.session.get(User, user_id)
         if not user:
             logger.warning(f"User not found for SOS: ID {user_id}")
             return jsonify({'error': 'User not found'}), 404
-
         location_data = {}
         if data.get('latitude') is not None and data.get('longitude') is not None:
             try:
@@ -866,8 +822,7 @@ def trigger_sos(user_id):
                 logger.warning(f"Invalid SOS location data: {str(e)}")
                 location_data = {'latitude': None, 'longitude': None, 'accuracy': None, 'is_high_accuracy': False}
         else:
-            with app.app_context():
-                latest_location = db.session.query(LocationLog).filter_by(user_id=user_id).order_by(LocationLog.timestamp.desc()).first()
+            latest_location = db.session.query(LocationLog).filter_by(user_id=user_id).order_by(LocationLog.timestamp.desc()).first()
             if latest_location:
                 location_data = {
                     'latitude': latest_location.latitude,
@@ -875,29 +830,24 @@ def trigger_sos(user_id):
                     'accuracy': latest_location.accuracy,
                     'is_high_accuracy': latest_location.is_high_accuracy
                 }
-
         sos_alert_location_data = {
             'latitude': location_data.get('latitude'),
             'longitude': location_data.get('longitude'),
             'accuracy': location_data.get('accuracy')
         }
-
-        with app.app_context():
-            sos_alert = SOSAlert(
-                user_id=user_id,
-                alert_type=data.get('alert_type', 'emergency'),
-                message=data.get('message', 'Emergency assistance needed'),
-                additional_info=json.dumps(data.get('additional_info', {})),
-                **sos_alert_location_data
-            )
-            db.session.add(sos_alert)
-            db.session.commit()
-
-            contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all() + \
-                       db.session.query(Guardian).filter_by(user_id=user_id).all()
+        sos_alert = SOSAlert(
+            user_id=user_id,
+            alert_type=data.get('alert_type', 'emergency'),
+            message=data.get('message', 'Emergency assistance needed'),
+            additional_info=json.dumps(data.get('additional_info', {})),
+            **sos_alert_location_data
+        )
+        db.session.add(sos_alert)
+        db.session.commit()
+        contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all() + \
+                   db.session.query(Guardian).filter_by(user_id=user_id).all()
         notifications = []
         errors = []
-
         alert_data_for_socket = {
             'user_id': user.id,
             'name': user.name,
@@ -909,11 +859,9 @@ def trigger_sos(user_id):
             'address': get_detailed_address(sos_alert.latitude, sos_alert.longitude)['full_address'] if sos_alert.latitude and sos_alert.longitude else 'Unknown Location',
             'timestamp': sos_alert.created_at.isoformat()
         }
-
         socketio.emit('sos_alert', alert_data_for_socket, room=str(user.id))
         socketio.emit('sos_alert_global', alert_data_for_socket)
         logger.info(f"SOS alert emitted via Socket.IO for user {user.id}")
-
         for contact in contacts:
             try:
                 notified = False
@@ -938,7 +886,6 @@ def trigger_sos(user_id):
             except Exception as e:
                 errors.append(f"Failed to notify {contact.name}: {str(e)}")
                 logger.error(f"Notification error for {contact.name}: {str(e)}")
-
         logger.info(f"SOS triggered for user {user.id}, notifications sent: {len(notifications)}")
         response = {
             'message': 'SOS triggered successfully',
@@ -956,27 +903,22 @@ def trigger_sos(user_id):
         return jsonify({'error': f'Error triggering SOS: {str(e)}'}), 500
 
 @app.route('/api/sos/<int:user_id>/status/<int:alert_id>', methods=['PUT'])
+@token_required
 def update_sos_status(user_id, alert_id):
     try:
         data = request.get_json()
         if not data or 'status' not in data:
             return jsonify({'error': 'Missing required field: status'}), 400
-
         valid_statuses = ['active', 'resolved', 'false_alarm', 'acknowledged']
         if data['status'] not in valid_statuses:
             return jsonify({'error': f'Invalid status. Must be one of: {valid_statuses}'}), 400
-
-        with app.app_context():
-            sos_alert = db.session.query(SOSAlert).filter_by(id=alert_id, user_id=user_id).first()
+        sos_alert = db.session.query(SOSAlert).filter_by(id=alert_id, user_id=user_id).first()
         if not sos_alert:
             return jsonify({'error': 'SOS alert not found'}), 404
-
-        with app.app_context():
-            sos_alert.status = data['status']
-            sos_alert.resolved_at = datetime.now(UTC) if data['status'] in ['resolved', 'false_alarm'] else None
-            sos_alert.resolution_notes = data.get('notes')
-            db.session.commit()
-
+        sos_alert.status = data['status']
+        sos_alert.resolved_at = datetime.now(timezone.utc) if data['status'] in ['resolved', 'false_alarm'] else None
+        sos_alert.resolution_notes = data.get('notes')
+        db.session.commit()
         socketio.emit('sos_status_update', {
             'alert_id': sos_alert.id,
             'user_id': user_id,
@@ -985,7 +927,6 @@ def update_sos_status(user_id, alert_id):
             'notes': sos_alert.resolution_notes
         })
         logger.info(f"SOS status update emitted via Socket.IO for alert {alert_id}")
-
         return jsonify({
             'message': 'SOS alert status updated',
             'alert_id': alert_id,
@@ -998,27 +939,24 @@ def update_sos_status(user_id, alert_id):
         return jsonify({'error': f'Error updating SOS status: {str(e)}'}), 500
 
 @app.route('/api/location/<int:user_id>/history', methods=['GET'])
+@token_required
 def get_location_history(user_id):
     try:
         limit = request.args.get('limit', 100, type=int)
         hours = request.args.get('hours', 24, type=int)
         high_accuracy_only = request.args.get('high_accuracy_only', 'false').lower() == 'true'
-
-        with app.app_context():
-            query = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
-                LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=hours)
-            )
-            if high_accuracy_only:
-                query = query.filter(LocationLog.is_high_accuracy == True)
-            locations = query.order_by(LocationLog.timestamp.desc()).limit(limit).all()
-
+        query = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
+            LocationLog.timestamp >= datetime.now(timezone.utc) - timedelta(hours=hours)
+        )
+        if high_accuracy_only:
+            query = query.filter(LocationLog.is_high_accuracy == True)
+        locations = query.order_by(LocationLog.timestamp.desc()).limit(limit).all()
         location_data = [{
             'id': loc.id, 'latitude': loc.latitude, 'longitude': loc.longitude, 'accuracy': loc.accuracy,
             'accuracy_description': get_accuracy_description(loc.accuracy), 'altitude': loc.altitude,
             'heading': loc.heading, 'speed': loc.speed, 'address': loc.address,
             'location_source': loc.location_source, 'timestamp': loc.timestamp.isoformat()
         } for loc in locations]
-
         logger.info(f"Location history fetched for user {user_id}: {len(location_data)} records")
         return jsonify({
             'locations': location_data,
@@ -1030,25 +968,21 @@ def get_location_history(user_id):
         return jsonify({'error': f'Error fetching location history: {str(e)}'}), 500
 
 @app.route('/api/location/<int:user_id>/route', methods=['GET'])
+@token_required
 def get_location_route(user_id):
     try:
         hours = request.args.get('hours', 24, type=int)
         simplify = request.args.get('simplify', 'true').lower() == 'true'
-
-        with app.app_context():
-            locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
-                LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=hours)
-            ).order_by(LocationLog.timestamp.asc()).all()
-
+        locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
+            LocationLog.timestamp >= datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).order_by(LocationLog.timestamp.asc()).all()
         if not locations:
             logger.warning(f"No location data found for user {user_id}")
             return jsonify({'error': 'No location data found'}), 404
-
         route_points = [{
             'lat': loc.latitude, 'lng': loc.longitude, 'timestamp': loc.timestamp.isoformat(),
             'accuracy': loc.accuracy, 'address': loc.address
         } for loc in locations]
-
         if simplify and len(route_points) > 2:
             simplified = [route_points[0]]
             for i in range(1, len(route_points) - 1):
@@ -1060,7 +994,6 @@ def get_location_route(user_id):
                     simplified.append(curr_point)
             simplified.append(route_points[-1])
             route_points = simplified
-
         total_distance = 0
         if len(route_points) > 1:
             for i in range(1, len(route_points)):
@@ -1068,7 +1001,6 @@ def get_location_route(user_id):
                 lng_diff = route_points[i]['lng'] - route_points[i-1]['lng']
                 distance = ((lat_diff ** 2 + lng_diff ** 2) ** 0.5) * 111000
                 total_distance += distance
-
         logger.info(f"Route generated for user {user_id}: {len(route_points)} points")
         return jsonify({
             'route_points': route_points,
@@ -1080,9 +1012,9 @@ def get_location_route(user_id):
             },
             'bounds': {
                 'north': max(point['lat'] for point in route_points) if route_points else None,
-                'south': min(point['lat'] for point in route_points) if route_points else None,
+                'south': min(point['lat'] for point in route_points) if point['lat'] for point in route_points else None,
                 'east': max(point['lng'] for point in route_points) if route_points else None,
-                'west': min(point['lng'] for point in route_points) if route_points else None
+                'west': min(point['lng'] for point in route_points) if point['lng'] for point in route_points else None
             }
         }), 200
     except Exception as e:
@@ -1090,11 +1022,10 @@ def get_location_route(user_id):
         return jsonify({'error': f'Error generating route: {str(e)}'}), 500
 
 @app.route('/api/period-tracker/<int:user_id>/history', methods=['GET'])
+@token_required
 def get_period_history(user_id):
     try:
-        with app.app_context():
-            periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).all()
-
+        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).all()
         return jsonify({
             'periods': [{
                 'id': p.id, 'cycle_start_date': p.cycle_start_date.isoformat(), 'cycle_length': p.cycle_length,
@@ -1107,28 +1038,22 @@ def get_period_history(user_id):
         return jsonify({'error': f'Error fetching period history: {str(e)}'}), 500
 
 @app.route('/api/period-tracker/<int:user_id>/predict', methods=['GET'])
+@token_required
 def get_period_prediction(user_id):
     try:
-        with app.app_context():
-            periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).limit(3).all()
-
+        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).limit(3).all()
         if len(periods) < 2:
             return jsonify({'message': 'Log at least 2 periods to get a prediction.'}), 404
-
         cycle_lengths = []
         for i in range(len(periods) - 1):
             cycle_duration = (periods[i].cycle_start_date - periods[i+1].cycle_start_date).days
             if cycle_duration > 0:
                 cycle_lengths.append(cycle_duration)
-
         if not cycle_lengths:
             return jsonify({'message': 'Not enough data to calculate a reliable cycle length for prediction.'}), 404
-
         average_cycle_length = sum(cycle_lengths) / len(cycle_lengths)
-
         last_period_start = periods[0].cycle_start_date
         predicted_next_period_date = last_period_start + timedelta(days=round(average_cycle_length))
-
         return jsonify({
             'predicted_date': predicted_next_period_date.isoformat(),
             'average_cycle_length': round(average_cycle_length, 1),
@@ -1139,25 +1064,24 @@ def get_period_prediction(user_id):
         return jsonify({'error': f'Error generating period prediction: {str(e)}'}), 500
 
 @app.route('/api/period-tracker/<int:user_id>/log', methods=['POST'])
+@token_required
 def log_period(user_id):
     try:
         data = request.get_json()
         if not data or 'cycle_start_date' not in data:
             return jsonify({'error': 'Cycle start date is required'}), 400
-
-        with app.app_context():
-            period_log = PeriodTracker(
-                user_id=user_id,
-                cycle_start_date=datetime.strptime(data['cycle_start_date'], '%Y-%m-%d').date(),
-                cycle_length=data.get('cycle_length'),
-                period_length=data.get('period_length'),
-                flow_intensity=data.get('flow_intensity'),
-                symptoms=data.get('symptoms'),
-                mood=data.get('mood'),
-                notes=data.get('notes')
-            )
-            db.session.add(period_log)
-            db.session.commit()
+        period_log = PeriodTracker(
+            user_id=user_id,
+            cycle_start_date=datetime.strptime(data['cycle_start_date'], '%Y-%m-%d').date(),
+            cycle_length=data.get('cycle_length'),
+            period_length=data.get('period_length'),
+            flow_intensity=data.get('flow_intensity'),
+            symptoms=data.get('symptoms'),
+            mood=data.get('mood'),
+            notes=data.get('notes')
+        )
+        db.session.add(period_log)
+        db.session.commit()
         return jsonify({'message': 'Period logged successfully', 'log_id': period_log.id}), 201
     except Exception as e:
         db.session.rollback()
@@ -1165,53 +1089,45 @@ def log_period(user_id):
         return jsonify({'error': f'Failed to log period: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/start', methods=['POST'])
+@token_required
 def start_pregnancy_tracking(user_id):
     try:
         data = request.get_json()
         if not data or 'lmp_date' not in data:
             return jsonify({'error': 'Last menstrual period date (lmp_date) is required'}), 400
-
         lmp_date = datetime.strptime(data['lmp_date'], '%Y-%m-%d').date()
         due_date = lmp_date + timedelta(days=280)
-
-        with app.app_context():
-            db.session.query(PregnancyTracker).filter_by(user_id=user_id).update({'is_active': False})
-            pregnancy = PregnancyTracker(
-                user_id=user_id,
-                last_menstrual_period=lmp_date,
-                due_date=due_date,
-                is_active=True
-            )
-            db.session.add(pregnancy)
-            db.session.commit()
-
+        db.session.query(PregnancyTracker).filter_by(user_id=user_id).update({'is_active': False})
+        pregnancy = PregnancyTracker(
+            user_id=user_id,
+            last_menstrual_period=lmp_date,
+            due_date=due_date,
+            is_active=True
+        )
+        db.session.add(pregnancy)
+        db.session.commit()
         logger.info(f"Pregnancy tracking started for user {user_id}. Due date: {due_date.isoformat()}")
         return jsonify({
             'message': 'Pregnancy tracking started successfully',
             'pregnancy_id': pregnancy.id,
             'due_date': due_date.isoformat()
         }), 201
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Failed to start pregnancy tracking for user {user_id}: {str(e)}")
         return jsonify({'error': f'Failed to start tracking: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/dashboard', methods=['GET'])
+@token_required
 def get_maternity_dashboard(user_id):
     try:
-        with app.app_context():
-            pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
+        pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
             return jsonify({'error': 'No active pregnancy found for this user.'}), 404
-
-        days_pregnant = (datetime.now(UTC).date() - pregnancy.last_menstrual_period).days
+        days_pregnant = (datetime.now(timezone.utc).date() - pregnancy.last_menstrual_period).days
         current_week = (days_pregnant // 7) + 1
-        days_remaining = (pregnancy.due_date - datetime.now(UTC).date()).days
-
-        with app.app_context():
-            guide = db.session.query(MaternityGuide).filter_by(week=current_week).first()
-
+        days_remaining = (pregnancy.due_date - datetime.now(timezone.utc).date()).days
+        guide = db.session.query(MaternityGuide).filter_by(week=current_week).first()
         return jsonify({
             'due_date': pregnancy.due_date.isoformat(),
             'current_week': current_week,
@@ -1226,7 +1142,6 @@ def get_maternity_dashboard(user_id):
                 'image_url': guide.image_url
             } if guide else None
         }), 200
-
     except Exception as e:
         logger.error(f"Error fetching maternity dashboard for user {user_id}: {str(e)}")
         return jsonify({'error': f'Error fetching dashboard: {str(e)}'}), 500
@@ -1234,11 +1149,9 @@ def get_maternity_dashboard(user_id):
 @app.route('/api/maternity/guide/<int:week>', methods=['GET'])
 def get_maternity_guide_for_week(week):
     try:
-        with app.app_context():
-            guide = db.session.query(MaternityGuide).filter_by(week=week).first()
+        guide = db.session.query(MaternityGuide).filter_by(week=week).first()
         if not guide:
             return jsonify({'error': 'Guide for the specified week not found.'}), 404
-
         return jsonify({
             'week': guide.week,
             'title': guide.title,
@@ -1247,289 +1160,237 @@ def get_maternity_guide_for_week(week):
             'tips': guide.tips,
             'image_url': guide.image_url
         }), 200
-
     except Exception as e:
         logger.error(f"Error fetching maternity guide for week {week}: {str(e)}")
         return jsonify({'error': f'Error fetching guide: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/symptoms', methods=['POST', 'GET'])
+@token_required
 def manage_pregnancy_symptoms(user_id):
     try:
-        with app.app_context():
-            pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
+        pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
             return jsonify({'error': 'No active pregnancy found for this user.'}), 404
-
         if request.method == 'POST':
             data = request.get_json()
             if not data or 'symptom_name' not in data:
                 return jsonify({'error': 'symptom_name is a required field.'}), 400
-
-            with app.app_context():
-                symptom = PregnancySymptom(
-                    pregnancy_id=pregnancy.id,
-                    symptom_name=data['symptom_name'],
-                    severity=data.get('severity'),
-                    notes=data.get('notes')
-                )
-                db.session.add(symptom)
-                db.session.commit()
+            symptom = PregnancySymptom(
+                pregnancy_id=pregnancy.id,
+                symptom_name=data['symptom_name'],
+                severity=data.get('severity'),
+                notes=data.get('notes')
+            )
+            db.session.add(symptom)
+            db.session.commit()
             return jsonify({'message': 'Symptom logged successfully', 'symptom_id': symptom.id}), 201
-
         if request.method == 'GET':
-            with app.app_context():
-                symptoms = db.session.query(PregnancySymptom).filter_by(pregnancy_id=pregnancy.id).order_by(PregnancySymptom.log_date.desc()).all()
+            symptoms = db.session.query(PregnancySymptom).filter_by(pregnancy_id=pregnancy.id).order_by(PregnancySymptom.log_date.desc()).all()
             return jsonify({
                 'symptoms': [{
                     'id': s.id, 'symptom_name': s.symptom_name, 'severity': s.severity,
                     'notes': s.notes, 'log_date': s.log_date.isoformat()
                 } for s in symptoms]
             }), 200
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error managing pregnancy symptoms for user {user_id}: {str(e)}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/kick-counter', methods=['POST', 'GET'])
+@token_required
 def manage_kick_counter(user_id):
     try:
-        with app.app_context():
-            pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
+        pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
             return jsonify({'error': 'No active pregnancy found for this user.'}), 404
-
         if request.method == 'POST':
             data = request.get_json()
             required_fields = ['start_time', 'end_time', 'kick_count']
             if not data or not all(key in data for key in required_fields):
                 return jsonify({'error': f'Missing required fields: {required_fields}'}), 400
-
             start_time = datetime.fromisoformat(data['start_time'])
             end_time = datetime.fromisoformat(data['end_time'])
             duration = (end_time - start_time).total_seconds() / 60
-
-            with app.app_context():
-                kick_session = KickCount(
-                    pregnancy_id=pregnancy.id,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kick_count=data['kick_count'],
-                    duration_minutes=round(duration)
-                )
-                db.session.add(kick_session)
-                db.session.commit()
+            kick_session = KickCount(
+                pregnancy_id=pregnancy.id,
+                start_time=start_time,
+                end_time=end_time,
+                kick_count=data['kick_count'],
+                duration_minutes=round(duration)
+            )
+            db.session.add(kick_session)
+            db.session.commit()
             return jsonify({'message': 'Kick session logged successfully', 'session_id': kick_session.id}), 201
-
         if request.method == 'GET':
-            with app.app_context():
-                sessions = db.session.query(KickCount).filter_by(pregnancy_id=pregnancy.id).order_by(KickCount.start_time.desc()).all()
+            sessions = db.session.query(KickCount).filter_by(pregnancy_id=pregnancy.id).order_by(KickCount.start_time.desc()).all()
             return jsonify({
                 'sessions': [{
                     'id': s.id, 'start_time': s.start_time.isoformat(), 'end_time': s.end_time.isoformat(),
                     'kick_count': s.kick_count, 'duration_minutes': s.duration_minutes
                 } for s in sessions]
             }), 200
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error with kick counter for user {user_id}: {str(e)}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/contraction-timer', methods=['POST', 'GET'])
+@token_required
 def manage_contraction_timer(user_id):
     try:
-        with app.app_context():
-            pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
+        pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
             return jsonify({'error': 'No active pregnancy found for this user.'}), 404
-
         if request.method == 'POST':
             data = request.get_json()
             if not data or 'duration_seconds' not in data:
                 return jsonify({'error': 'duration_seconds is required'}), 400
-
-            with app.app_context():
-                last_contraction = db.session.query(Contraction).filter_by(pregnancy_id=pregnancy.id).order_by(Contraction.start_time.desc()).first()
+            last_contraction = db.session.query(Contraction).filter_by(pregnancy_id=pregnancy.id).order_by(Contraction.start_time.desc()).first()
             frequency = None
-            current_start_time = datetime.now(UTC)
+            current_start_time = datetime.now(timezone.utc)
             if last_contraction:
                 frequency = (current_start_time - last_contraction.start_time).total_seconds() / 60
-
-            with app.app_context():
-                contraction = Contraction(
-                    pregnancy_id=pregnancy.id,
-                    start_time=current_start_time,
-                    duration_seconds=data['duration_seconds'],
-                    frequency_minutes=round(frequency, 1) if frequency else None
-                )
-                db.session.add(contraction)
-                db.session.commit()
+            contraction = Contraction(
+                pregnancy_id=pregnancy.id,
+                start_time=current_start_time,
+                duration_seconds=data['duration_seconds'],
+                frequency_minutes=round(frequency, 1) if frequency else None
+            )
+            db.session.add(contraction)
+            db.session.commit()
             return jsonify({'message': 'Contraction logged successfully', 'contraction_id': contraction.id}), 201
-
         if request.method == 'GET':
-            with app.app_context():
-                contractions = db.session.query(Contraction).filter_by(pregnancy_id=pregnancy.id).order_by(Contraction.start_time.desc()).limit(20).all()
+            contractions = db.session.query(Contraction).filter_by(pregnancy_id=pregnancy.id).order_by(Contraction.start_time.desc()).limit(20).all()
             return jsonify({
                 'contractions': [{
                     'id': c.id, 'start_time': c.start_time.isoformat(), 'duration_seconds': c.duration_seconds,
                     'frequency_minutes': c.frequency_minutes
                 } for c in contractions]
             }), 200
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error with contraction timer for user {user_id}: {str(e)}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 @app.route('/api/community/posts', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
 def manage_community_posts():
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/community/posts")
         return make_response('', 200)
-
     try:
         if request.method == 'GET':
             limit = request.args.get('limit', 20, type=int)
             category = request.args.get('category')
-            with app.app_context():
-                query = db.session.query(CommunityPost)
-                if category:
-                    query = query.filter_by(category=category)
-                posts = query.order_by(CommunityPost.created_at.desc()).limit(limit).all()
-
+            query = db.session.query(CommunityPost)
+            if category:
+                query = query.filter_by(category=category)
+            posts = query.order_by(CommunityPost.created_at.desc()).limit(limit).all()
             posts_data = [{
                 'id': post.id, 'user_id': post.user_id, 'title': post.title, 'content': post.content,
                 'category': post.category, 'created_at': post.created_at.isoformat(),
                 'updated_at': post.updated_at.isoformat() if post.updated_at else None
             } for post in posts]
-
             logger.info(f"Fetched {len(posts_data)} community posts")
             return jsonify({'posts': posts_data, 'count': len(posts_data)}), 200
-
         if request.method == 'POST':
             data = request.get_json()
             if not data or not all(key in data for key in ['user_id', 'title', 'content']):
                 logger.warning(f"Invalid community post data: {data}")
                 return jsonify({'error': 'Missing required fields: user_id, title, content'}), 400
-
-            with app.app_context():
-                user = db.session.get(User, data['user_id'])
+            user = db.session.get(User, data['user_id'])
             if not user:
                 logger.warning(f"User not found for community post: ID {data['user_id']}")
                 return jsonify({'error': 'User not found'}), 404
-
-            with app.app_context():
-                post = CommunityPost(
-                    user_id=data['user_id'],
-                    title=data['title'],
-                    content=data['content'],
-                    category=data.get('category')
-                )
-                db.session.add(post)
-                db.session.commit()
-
+            post = CommunityPost(
+                user_id=data['user_id'],
+                title=data['title'],
+                content=data['content'],
+                category=data.get('category')
+            )
+            db.session.add(post)
+            db.session.commit()
             socketio.emit('new_community_post', {
                 'post_id': post.id, 'user_id': post.user_id, 'title': post.title,
                 'category': post.category, 'created_at': post.created_at.isoformat()
             })
-
             logger.info(f"Community post created by user {data['user_id']}")
             return jsonify({
                 'message': 'Post created successfully',
                 'post_id': post.id
             }), 201
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Community post error: {str(e)}")
         return jsonify({'error': f'Error managing community post: {str(e)}'}), 500
 
 @app.route('/api/community/posts/<int:post_id>/comments', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
 def manage_community_comments(post_id):
     if request.method == 'OPTIONS':
         logger.debug("Handling OPTIONS request for /api/community/posts/comments")
         return make_response('', 200)
-
     try:
-        with app.app_context():
-            post = db.session.get(CommunityPost, post_id)
+        post = db.session.get(CommunityPost, post_id)
         if not post:
             logger.warning(f"Community post not found: ID {post_id}")
             return jsonify({'error': 'Post not found'}), 404
-
         if request.method == 'GET':
-            with app.app_context():
-                comments = db.session.query(CommunityComment).filter_by(post_id=post_id).order_by(CommunityComment.created_at.asc()).all()
+            comments = db.session.query(CommunityComment).filter_by(post_id=post_id).order_by(CommunityComment.created_at.asc()).all()
             comments_data = [{
                 'id': comment.id, 'user_id': comment.user_id, 'content': comment.content,
                 'created_at': comment.created_at.isoformat()
             } for comment in comments]
-
             logger.info(f"Fetched {len(comments_data)} comments for post {post_id}")
             return jsonify({'comments': comments_data, 'count': len(comments_data)}), 200
-
         if request.method == 'POST':
             data = request.get_json()
             if not data or not all(key in data for key in ['user_id', 'content']):
                 logger.warning(f"Invalid comment data: {data}")
                 return jsonify({'error': 'Missing required fields: user_id, content'}), 400
-
-            with app.app_context():
-                user = db.session.get(User, data['user_id'])
+            user = db.session.get(User, data['user_id'])
             if not user:
                 logger.warning(f"User not found for comment: ID {data['user_id']}")
                 return jsonify({'error': 'User not found'}), 404
-
-            with app.app_context():
-                comment = CommunityComment(
-                    post_id=post_id,
-                    user_id=data['user_id'],
-                    content=data['content']
-                )
-                db.session.add(comment)
-                db.session.commit()
-
+            comment = CommunityComment(
+                post_id=post_id,
+                user_id=data['user_id'],
+                content=data['content']
+            )
+            db.session.add(comment)
+            db.session.commit()
             socketio.emit('new_community_comment', {
                 'post_id': post_id, 'comment_id': comment.id, 'user_id': comment.user_id,
                 'content': comment.content, 'created_at': comment.created_at.isoformat()
             })
-
             logger.info(f"Comment added to post {post_id} by user {data['user_id']}")
             return jsonify({
                 'message': 'Comment added successfully',
                 'comment_id': comment.id
             }), 201
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Community comment error for post {post_id}: {str(e)}")
         return jsonify({'error': f'Error managing comment: {str(e)}'}), 500
 
+# SocketIO Events
+@socketio.on('connect')
+def handle_connect():
+    logger.info("Client connected to SocketIO")
+    emit('connection_response', {'message': 'Connected to Womecare Backend'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info("Client disconnected from SocketIO")
+
+@socketio.on_error_default
+def handle_socketio_error(e):
+    logger.error(f"SocketIO error: {str(e)}")
+    emit('error', {'message': 'An error occurred'})
+
+# Error Handlers
 @app.errorhandler(404)
 def not_found(error):
     logger.warning(f"404 error: {str(error)} - Requested URL: {request.url}")
-    return jsonify({'error': 'Resource not found'}), 404
-
-@app.errorhandler(500)
-def server_error(error):
-    logger.error(f"500 error: {str(error)} - Requested URL: {request.url}")
-    return jsonify({'error': 'Internal server error'}), 500
-
-def initialize_database():
-    """Initialize database on application startup."""
-    try:
-        init_db()
-        logger.info("Database initialization completed")
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {str(e)}")
-        raise
-
-if __name__ == '__main__':
-    initialize_database()
-    try:
-        port = int(os.environ.get("PORT", 5000))
-        logger.info(f"Starting Flask server with Socket.IO on port {port}")
-        socketio.run(app, host='0.0.0.0', port=port)
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
+    return jsonify({'

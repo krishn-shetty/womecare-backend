@@ -40,6 +40,11 @@ for var in required_env_vars:
     if not os.getenv(var):
         raise ValueError(f"Missing required environment variable: {var}")
 
+print("Loaded DB URI:", os.environ.get("SQLALCHEMY_DATABASE_URI"))
+print("DEBUG: SQLALCHEMY_DATABASE_URI =", os.getenv("SQLALCHEMY_DATABASE_URI"))
+print("DEBUG: SECRET_KEY =", os.getenv("SECRET_KEY"))
+print("DEBUG: FRONTEND_URL =", os.getenv("FRONTEND_URL"))
+
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')

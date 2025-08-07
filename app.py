@@ -38,18 +38,17 @@ db = SQLAlchemy(app)
 # Get frontend URL from environment variable or fallback to localhost for development
 frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-# Allow CORS for both API routes and WebSocket connections
+# Enable CORS
 CORS(app, resources={
-    r"/api/*": {
-        "origins": [frontend_url],
+    r"/*": {
+        "origins": frontend_url,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
-# Initialize SocketIO with CORS allowed origins
-socketio = SocketIO(app, cors_allowed_origins=[frontend_url])
-
+# Enable Socket.IO CORS
+socketio = SocketIO(app, cors_allowed_origins=frontend_url)
 
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),

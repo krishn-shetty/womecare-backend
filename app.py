@@ -1,5 +1,3 @@
-# app.py
-
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, UTC
@@ -11,7 +9,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
-from twilio.rest import Client
 import folium
 import requests
 from geopy.geocoders import Nominatim
@@ -20,9 +17,6 @@ import json
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import jwt
-
-import eventlet
-eventlet.monkey_patch() 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -60,12 +54,6 @@ socketio = SocketIO(app, cors_allowed_origins=[
     "http://10.251.77.130:3000",
     "*"
 ])
-
-TWILIO_CONFIG = {
-    'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),
-    'auth_token': os.getenv('TWILIO_AUTH_TOKEN'),
-    'phone_number': os.getenv('TWILIO_PHONE_NUMBER')
-}
 
 EMAIL_CONFIG = {
     'user': os.getenv('EMAIL_USER'),
@@ -163,7 +151,6 @@ class SOSAlert(db.Model):
     resolved_at = db.Column(db.DateTime)
     resolution_notes = db.Column(db.Text)
 
-# MERGED FEATURE: Maternity Models
 class PregnancyTracker(db.Model):
     __tablename__ = 'pregnancy_tracker'
     id = db.Column(db.Integer, primary_key=True)
@@ -188,7 +175,7 @@ class PregnancySymptom(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     pregnancy_id = db.Column(db.Integer, db.ForeignKey('pregnancy_tracker.id'), nullable=False)
     symptom_name = db.Column(db.String(100), nullable=False)
-    severity = db.Column(db.Integer) # e.g., 1 to 5
+    severity = db.Column(db.Integer)  # e.g., 1 to 5
     notes = db.Column(db.Text)
     log_date = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
 
@@ -209,14 +196,13 @@ class Contraction(db.Model):
     duration_seconds = db.Column(db.Integer)
     frequency_minutes = db.Column(db.Integer)
 
-# MERGED FEATURE: Community Forum Models
 class CommunityPost(db.Model):
     __tablename__ = 'community_post'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    category = db.Column(db.String(50)) # e.g., Pregnancy, Health, Support
+    category = db.Column(db.String(50))  # e.g., Pregnancy, Health, Support
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
     updated_at = db.Column(db.DateTime, onupdate=lambda: datetime.now(UTC))
 
@@ -455,23 +441,23 @@ def send_emergency_email(email, user_name, message, latitude=None, longitude=Non
         logger.error(f"Failed to send email to {email}: {str(e)}")
 
 def send_emergency_sms(phone, user_name, message, latitude=None, longitude=None, accuracy=None):
+    """
+    Sends an emergency SMS for project demonstration by logging to console.
+    """
     try:
-        if not all(TWILIO_CONFIG.values()):
-            logger.warning("Twilio credentials not configured")
-            return
+        location_text = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Location not available"
+        
+        sms_message_body = f"EMERGENCY: {user_name} needs help! Message: {message}. Location: {location_text}"
 
-        location_text = f"\nLocation: https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" if latitude and longitude else ""
-        sms_message = f'EMERGENCY: {user_name} needs help! {message}{location_text}'
-
-        client = Client(TWILIO_CONFIG['account_sid'], TWILIO_CONFIG['auth_token'])
-        client.messages.create(
-            body=sms_message,
-            from_=TWILIO_CONFIG['phone_number'],
-            to=phone
-        )
-        logger.info(f"SMS sent to {phone}")
+        logger.info("="*50)
+        logger.info("--- MOCK SMS NOTIFICATION (SIMULATED) ---")
+        logger.info(f"Recipient: {phone}")
+        logger.info(f"Message: {sms_message_body}")
+        logger.info("--- SMS SIMULATION COMPLETE ---")
+        logger.info("="*50)
+        
     except Exception as e:
-        logger.error(f"Failed to send SMS to {phone}: {str(e)}")
+        logger.error(f"An error occurred during SMS mock simulation: {str(e)}")
 
 # --- API Endpoints ---
 
@@ -728,14 +714,12 @@ def get_dashboard(user_id):
             logger.warning(f"User not found for dashboard: ID {user_id}")
             return jsonify({'error': 'User not found'}), 404
 
-        # Emergency Contacts
         contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all()
         contacts_data = [{
             'id': contact.id, 'name': contact.name, 'relationship': contact.relationship,
             'phone': contact.phone, 'email': contact.email, 'is_primary': contact.is_primary
         } for contact in contacts]
 
-        # Recent Locations
         locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
             LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=24)
         ).order_by(LocationLog.timestamp.desc()).limit(10).all()
@@ -745,7 +729,6 @@ def get_dashboard(user_id):
             'timestamp': loc.timestamp.isoformat()
         } for loc in locations]
 
-        # SOS Alerts
         sos_alerts = db.session.query(SOSAlert).filter_by(user_id=user_id).filter(
             SOSAlert.created_at >= datetime.now(UTC) - timedelta(days=7)
         ).order_by(SOSAlert.created_at.desc()).limit(5).all()
@@ -756,7 +739,6 @@ def get_dashboard(user_id):
             'resolved_at': alert.resolved_at.isoformat() if alert.resolved_at else None
         } for alert in sos_alerts]
 
-        # Pregnancy Tracker Summary
         pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         pregnancy_data = None
         if pregnancy:
@@ -925,7 +907,7 @@ def trigger_sos(user_id):
         for contact in contacts:
             try:
                 notified = False
-                if contact.phone and all(TWILIO_CONFIG.values()):
+                if contact.phone:
                     send_emergency_sms(
                         contact.phone,
                         user.name,
@@ -1166,20 +1148,17 @@ def log_period(user_id):
         logger.error(f"Failed to log period for user {user_id}: {str(e)}")
         return jsonify({'error': f'Failed to log period: {str(e)}'}), 500
 
-# --- MERGED: Maternity Suite Endpoints ---
+# --- Maternity Suite Endpoints ---
 @app.route('/api/maternity/<int:user_id>/start', methods=['POST'])
 def start_pregnancy_tracking(user_id):
-    """Starts tracking pregnancy for a user based on their last menstrual period."""
     try:
         data = request.get_json()
         if not data or 'lmp_date' not in data:
             return jsonify({'error': 'Last menstrual period date (lmp_date) is required'}), 400
 
         lmp_date = datetime.strptime(data['lmp_date'], '%Y-%m-%d').date()
-        # A standard pregnancy is 280 days (40 weeks) from the LMP
         due_date = lmp_date + timedelta(days=280)
 
-        # Deactivate any previous pregnancy logs for this user
         db.session.query(PregnancyTracker).filter_by(user_id=user_id).update({'is_active': False})
 
         pregnancy = PregnancyTracker(
@@ -1205,7 +1184,6 @@ def start_pregnancy_tracking(user_id):
 
 @app.route('/api/maternity/<int:user_id>/dashboard', methods=['GET'])
 def get_maternity_dashboard(user_id):
-    """Gets the maternity dashboard for a user."""
     try:
         pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
@@ -1238,7 +1216,6 @@ def get_maternity_dashboard(user_id):
 
 @app.route('/api/maternity/guide/<int:week>', methods=['GET'])
 def get_maternity_guide_for_week(week):
-    """Gets the maternity guide for a specific week."""
     try:
         guide = db.session.query(MaternityGuide).filter_by(week=week).first()
         if not guide:
@@ -1259,7 +1236,6 @@ def get_maternity_guide_for_week(week):
 
 @app.route('/api/maternity/<int:user_id>/symptoms', methods=['POST', 'GET'])
 def manage_pregnancy_symptoms(user_id):
-    """Log or retrieve pregnancy symptoms."""
     try:
         pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
@@ -1296,7 +1272,6 @@ def manage_pregnancy_symptoms(user_id):
 
 @app.route('/api/maternity/<int:user_id>/kick-counter', methods=['POST', 'GET'])
 def manage_kick_counter(user_id):
-    """Log or retrieve kick counting sessions."""
     try:
         pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
@@ -1310,7 +1285,7 @@ def manage_kick_counter(user_id):
 
             start_time = datetime.fromisoformat(data['start_time'])
             end_time = datetime.fromisoformat(data['end_time'])
-            duration = (end_time - start_time).total_seconds() / 60 # in minutes
+            duration = (end_time - start_time).total_seconds() / 60  # in minutes
 
             kick_session = KickCount(
                 pregnancy_id=pregnancy.id,
@@ -1339,7 +1314,6 @@ def manage_kick_counter(user_id):
 
 @app.route('/api/maternity/<int:user_id>/contraction-timer', methods=['POST', 'GET'])
 def manage_contraction_timer(user_id):
-    """Log or retrieve contractions."""
     try:
         pregnancy = db.session.query(PregnancyTracker).filter_by(user_id=user_id, is_active=True).first()
         if not pregnancy:
@@ -1354,7 +1328,7 @@ def manage_contraction_timer(user_id):
             frequency = None
             current_start_time = datetime.now(UTC)
             if last_contraction:
-                frequency = (current_start_time - last_contraction.start_time).total_seconds() / 60 # in minutes
+                frequency = (current_start_time - last_contraction.start_time).total_seconds() / 60  # in minutes
 
             contraction = Contraction(
                 pregnancy_id=pregnancy.id,
@@ -1380,7 +1354,7 @@ def manage_contraction_timer(user_id):
         logger.error(f"Error with contraction timer for user {user_id}: {str(e)}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-# --- MERGED: Community Forum Endpoints ---
+# --- Community Forum Endpoints ---
 @app.route('/api/community/posts', methods=['GET', 'POST', 'OPTIONS'])
 def manage_community_posts():
     if request.method == 'OPTIONS':
@@ -1520,3 +1494,4 @@ if __name__ == '__main__':
         socketio.run(app, host='0.0.0.0', port=port)
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
+

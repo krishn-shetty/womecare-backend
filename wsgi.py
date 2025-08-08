@@ -1,7 +1,5 @@
-# wsgi.py
-import eventlet
-eventlet.monkey_patch()
+import gevent
+from gevent import monkey
+monkey.patch_all()
 
 from app import app, socketio
-
-# This file is used by Gunicorn to start the application.

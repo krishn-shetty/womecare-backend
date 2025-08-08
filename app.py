@@ -53,7 +53,7 @@ CORS(app, resources={
             "http://172.16.10.163:8501",
             "http://localhost:3000",
             "http://10.251.77.130:3000",
-            "https://womencare-frontend-5ve6-kd1o2f2o8.vercel.app",
+            "https://womencare-frontend-5ve6.vercel.app",
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]

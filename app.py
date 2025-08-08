@@ -1,3 +1,7 @@
+import eventlet
+eventlet.monkey_patch()
+
+
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, UTC
@@ -21,15 +25,24 @@ import jwt
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI', 'sqlite:///womecare.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 
-# Initialize SQLAlchemy db object BEFORE defining models
+# Use DATABASE_URL from Render, fallback to SQLite locally
+database_url = os.getenv('DATABASE_URL', 'sqlite:///womecare.db')
+
+# Render sometimes gives postgres:// instead of postgresql:// — fix that
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', '88%-h-3mzuzphjzot=o_snt31gss5_14gsz15(1)j%9lm2ej^w')
+
 db = SQLAlchemy(app)
+
 
 CORS(app, resources={
     r"/api/*": {

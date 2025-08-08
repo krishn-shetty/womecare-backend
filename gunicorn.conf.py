@@ -5,7 +5,8 @@ workers = 1
 worker_class = "gevent"  # Switch to gevent
 worker_connections = 1000
 timeout = 30
-keepalive = 2
+keepalive = 5
 loglevel = "debug"  # Set to debug for better error tracing
 accesslog = "-"
 errorlog = "-"
+

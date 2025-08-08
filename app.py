@@ -1,6 +1,3 @@
-
-
-
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, UTC

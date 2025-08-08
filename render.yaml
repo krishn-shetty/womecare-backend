@@ -4,8 +4,8 @@ services:
     env: python
     buildCommand: |
       pip install --upgrade pip
-      pip install -r requirements.txt
+      pip install --only-binary=all -r requirements.txt || pip install -r requirements.txt
     startCommand: gunicorn -c gunicorn.conf.py app:app
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.11

@@ -86,3 +86,5 @@ yarl==1.20.1
 flask-socketio==5.3.6
 python-socketio==5.11.2
 python-engineio==4.9.1
+Flask-SocketIO==5.3.6
+python-socketio==5.11.2

@@ -88,4 +88,5 @@ python-engineio==4.9.1
 Flask-SocketIO==5.3.6
 python-socketio==5.11.2
 python-engineio==4.9.1
+flask-migrate==4.0.7
 gevent==24.2.1

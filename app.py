@@ -545,7 +545,7 @@ def create_user():
             email=data['email'],
             phone=data['phone'],
             password=generate_password_hash(data['password']),
-            age=data.get('age'),
+            age=int(data.get('age')),
             blood_group=data.get('blood_group'),
             medical_conditions=data.get('medical_conditions')
         )

@@ -20,6 +20,7 @@ import logging
 import json
 import jwt
 from werkzeug.security import check_password_hash, generate_password_hash
+import bcrypt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -80,6 +81,16 @@ EMAIL_CONFIG = {
 
 # Google Maps API key
 Maps_API_KEY = os.getenv('Maps_API_KEY')
+
+# --- Password Hashing Functions ---
+def hash_password(password):
+    """Hash password using bcrypt"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
+def verify_password(password, hashed_password):
+    """Verify password against hashed password"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 # --- Database Models ---
 class User(db.Model):
@@ -499,7 +510,7 @@ def login_user():
             return jsonify({'error': 'Email and password are required'}), 400
 
         user = db.session.query(User).filter_by(email=email).first()
-        if not user or not check_password_hash(user.password, password):
+        if not user or not verify_password(password, user.password):
             logger.warning(f"Invalid login attempt for email: {email}")
             return jsonify({'error': 'Invalid credentials'}), 401
 
@@ -536,16 +547,21 @@ def create_user():
 
     try:
         data = request.get_json()
-        if not data or not all(key in data for key in ['name', 'email', 'phone', 'password']):
+        if not data or not all(key in data for key in ['name', 'email', 'phone', 'password', 'confirm_password']):
             logger.warning(f"Invalid user creation request: {data}")
-            return jsonify({'error': 'Missing required fields: name, email, phone, password'}), 400
+            return jsonify({'error': 'Missing required fields: name, email, phone, password, confirm_password'}), 400
+
+        # Check if passwords match
+        if data['password'] != data['confirm_password']:
+            logger.warning("Password confirmation does not match")
+            return jsonify({'error': 'Password confirmation does not match'}), 400
 
         user = User(
             name=data['name'],
             email=data['email'],
             phone=data['phone'],
-            password=generate_password_hash(data['password']),
-            age=int(data.get('age')),
+            password=hash_password(data['password']),
+            age=int(data.get('age')) if data.get('age') else None,
             blood_group=data.get('blood_group'),
             medical_conditions=data.get('medical_conditions')
         )
@@ -576,6 +592,46 @@ def create_user():
         db.session.rollback()
         logger.error(f"User creation error: {str(e)}")
         return jsonify({'error': f'Failed to create user: {str(e)}'}), 500
+
+@app.route('/api/users/<int:user_id>/password', methods=['PUT', 'OPTIONS'])
+def change_password(user_id):
+    """Endpoint for changing user password"""
+    if request.method == 'OPTIONS':
+        logger.debug("Handling OPTIONS request for /api/users/password")
+        return make_response('', 200)
+
+    try:
+        data = request.get_json()
+        if not data or not all(key in data for key in ['current_password', 'new_password', 'confirm_password']):
+            logger.warning(f"Invalid password change request for user {user_id}")
+            return jsonify({'error': 'Missing required fields: current_password, new_password, confirm_password'}), 400
+
+        user = db.session.get(User, user_id)
+        if not user:
+            logger.warning(f"User not found for password change: ID {user_id}")
+            return jsonify({'error': 'User not found'}), 404
+
+        # Verify current password
+        if not verify_password(data['current_password'], user.password):
+            logger.warning(f"Invalid current password for user {user_id}")
+            return jsonify({'error': 'Current password is incorrect'}), 400
+
+        # Check if new passwords match
+        if data['new_password'] != data['confirm_password']:
+            logger.warning(f"New password confirmation does not match for user {user_id}")
+            return jsonify({'error': 'New password confirmation does not match'}), 400
+
+        # Update password
+        user.password = hash_password(data['new_password'])
+        db.session.commit()
+
+        logger.info(f"Password changed successfully for user {user_id}")
+        return jsonify({'message': 'Password changed successfully'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Password change error for user {user_id}: {str(e)}")
+        return jsonify({'error': f'Error changing password: {str(e)}'}), 500
 
 @app.route('/api/users/email/<string:email>', methods=['GET'])
 def check_email(email):
@@ -618,8 +674,6 @@ def manage_user(user_id):
             user.age = data.get('age', user.age)
             user.blood_group = data.get('blood_group', user.blood_group)
             user.medical_conditions = data.get('medical_conditions', user.medical_conditions)
-            if data.get('password'):
-                user.password = generate_password_hash(data['password'])
 
             db.session.commit()
             logger.info(f"User updated: ID {user_id}")
@@ -826,6 +880,24 @@ def update_live_location(user_id):
         logger.error(f"Location update error for user {user_id}: {str(e)}")
         return jsonify({'error': f'Error updating location: {str(e)}'}), 500
 
+# NEW: Delete location endpoint
+@app.route('/api/location/<int:user_id>/<int:location_id>', methods=['DELETE'])
+def delete_location(user_id, location_id):
+    try:
+        location = db.session.query(LocationLog).filter_by(id=location_id, user_id=user_id).first()
+        if not location:
+            logger.warning(f"Location not found: ID {location_id}, User {user_id}")
+            return jsonify({'error': 'Location not found'}), 404
+
+        db.session.delete(location)
+        db.session.commit()
+        logger.info(f"Location deleted: ID {location_id} for user {user_id}")
+        return jsonify({'message': 'Location deleted successfully'}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Failed to delete location {location_id} for user {user_id}: {str(e)}")
+        return jsonify({'error': f'Failed to delete location: {str(e)}'}), 500
+
 @app.route('/api/location/<int:user_id>/track', methods=['POST'])
 def start_location_tracking(user_id):
     try:
@@ -911,11 +983,21 @@ def trigger_sos(user_id):
             'longitude': sos_alert.longitude,
             'accuracy': sos_alert.accuracy,
             'address': get_detailed_address(sos_alert.latitude, sos_alert.longitude)['full_address'] if sos_alert.latitude and sos_alert.longitude else 'Unknown Location',
-            'timestamp': sos_alert.created_at.isoformat()
+            'timestamp': sos_alert.created_at.isoformat(),
+            'emergency_services': {'ambulance': '108', 'police': '100', 'fire': '101', 'women_helpline': '1091'}
         }
 
+        # Send SOS notification in-page via Socket.IO
         socketio.emit('sos_alert', alert_data_for_socket, room=str(user.id))
         socketio.emit('sos_alert_global', alert_data_for_socket)
+        socketio.emit('sos_notification', {
+            'type': 'emergency',
+            'title': f'🚨 Emergency Alert from {user.name}',
+            'message': sos_alert.message,
+            'user_id': user.id,
+            'alert_id': sos_alert.id,
+            'timestamp': sos_alert.created_at.isoformat()
+        })
         logger.info(f"SOS alert emitted via Socket.IO for user {user.id}")
 
         for contact in contacts:
@@ -949,7 +1031,8 @@ def trigger_sos(user_id):
             'alert_id': sos_alert.id,
             'notifications_sent': len(notifications),
             'location_shared': bool(sos_alert.latitude and sos_alert.longitude),
-            'emergency_services': {'ambulance': '108', 'police': '100', 'fire': '101', 'women_helpline': '1091'}
+            'emergency_services': {'ambulance': '108', 'police': '100', 'fire': '101', 'women_helpline': '1091'},
+            'in_page_notification': True
         }
         if errors:
             response['notification_errors'] = errors
@@ -1105,31 +1188,58 @@ def get_period_history(user_id):
         logger.error(f"Period history error for user {user_id}: {str(e)}")
         return jsonify({'error': f'Error fetching period history: {str(e)}'}), 500
 
+# UPDATED: Fixed period prediction logic
 @app.route('/api/period-tracker/<int:user_id>/predict', methods=['GET'])
 def get_period_prediction(user_id):
     try:
-        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).limit(3).all()
+        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).limit(6).all()
 
         if len(periods) < 2:
             return jsonify({'message': 'Log at least 2 periods to get a prediction.'}), 404
 
+        # Calculate cycle lengths between consecutive periods
         cycle_lengths = []
         for i in range(len(periods) - 1):
-            cycle_duration = (periods[i].cycle_start_date - periods[i+1].cycle_start_date).days
-            if cycle_duration > 0:
+            current_period = periods[i]
+            previous_period = periods[i + 1]
+            cycle_duration = (current_period.cycle_start_date - previous_period.cycle_start_date).days
+            if cycle_duration > 0 and cycle_duration <= 45:  # Valid cycle length range
                 cycle_lengths.append(cycle_duration)
 
         if not cycle_lengths:
-            return jsonify({'message': 'Not enough data to calculate a reliable cycle length for prediction.'}), 404
+            return jsonify({'message': 'Not enough valid cycle data for prediction.'}), 404
 
+        # Calculate average cycle length
         average_cycle_length = sum(cycle_lengths) / len(cycle_lengths)
+        
+        # Calculate cycle variability for confidence assessment
+        if len(cycle_lengths) > 1:
+            variance = sum((x - average_cycle_length) ** 2 for x in cycle_lengths) / len(cycle_lengths)
+            std_deviation = variance ** 0.5
+            confidence = "High" if std_deviation < 3 else "Medium" if std_deviation < 7 else "Low"
+        else:
+            confidence = "Low"
 
+        # Predict next period date
         last_period_start = periods[0].cycle_start_date
         predicted_next_period_date = last_period_start + timedelta(days=round(average_cycle_length))
+        
+        # Calculate fertile window (ovulation typically occurs 14 days before next period)
+        ovulation_date = predicted_next_period_date - timedelta(days=14)
+        fertile_start = ovulation_date - timedelta(days=5)
+        fertile_end = ovulation_date + timedelta(days=1)
 
         return jsonify({
             'predicted_date': predicted_next_period_date.isoformat(),
             'average_cycle_length': round(average_cycle_length, 1),
+            'confidence': confidence,
+            'cycle_variability': round(std_deviation, 1) if len(cycle_lengths) > 1 else 0,
+            'fertile_window': {
+                'start': fertile_start.isoformat(),
+                'end': fertile_end.isoformat(),
+                'ovulation_date': ovulation_date.isoformat()
+            },
+            'cycles_analyzed': len(cycle_lengths),
             'message': 'Prediction successful'
         }), 200
     except Exception as e:
@@ -1160,6 +1270,57 @@ def log_period(user_id):
         db.session.rollback()
         logger.error(f"Failed to log period for user {user_id}: {str(e)}")
         return jsonify({'error': f'Failed to log period: {str(e)}'}), 500
+
+# NEW: Edit period tracker entry
+@app.route('/api/period-tracker/<int:user_id>/<int:period_id>', methods=['PUT', 'DELETE'])
+def manage_period_entry(user_id, period_id):
+    try:
+        period = db.session.query(PeriodTracker).filter_by(id=period_id, user_id=user_id).first()
+        if not period:
+            logger.warning(f"Period entry not found: ID {period_id}, User {user_id}")
+            return jsonify({'error': 'Period entry not found'}), 404
+
+        if request.method == 'PUT':
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided for update'}), 400
+
+            # Update period entry
+            if 'cycle_start_date' in data:
+                period.cycle_start_date = datetime.strptime(data['cycle_start_date'], '%Y-%m-%d').date()
+            period.cycle_length = data.get('cycle_length', period.cycle_length)
+            period.period_length = data.get('period_length', period.period_length)
+            period.flow_intensity = data.get('flow_intensity', period.flow_intensity)
+            period.symptoms = data.get('symptoms', period.symptoms)
+            period.mood = data.get('mood', period.mood)
+            period.notes = data.get('notes', period.notes)
+
+            db.session.commit()
+            logger.info(f"Period entry updated: ID {period_id} for user {user_id}")
+            return jsonify({
+                'message': 'Period entry updated successfully',
+                'period': {
+                    'id': period.id,
+                    'cycle_start_date': period.cycle_start_date.isoformat(),
+                    'cycle_length': period.cycle_length,
+                    'period_length': period.period_length,
+                    'flow_intensity': period.flow_intensity,
+                    'symptoms': period.symptoms,
+                    'mood': period.mood,
+                    'notes': period.notes
+                }
+            }), 200
+
+        if request.method == 'DELETE':
+            db.session.delete(period)
+            db.session.commit()
+            logger.info(f"Period entry deleted: ID {period_id} for user {user_id}")
+            return jsonify({'message': 'Period entry deleted successfully'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Failed to manage period entry {period_id} for user {user_id}: {str(e)}")
+        return jsonify({'error': f'Failed to manage period entry: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/start', methods=['POST'])
 def start_pregnancy_tracking(user_id):
@@ -1213,6 +1374,8 @@ def get_maternity_dashboard(user_id):
             'days_remaining': days_remaining,
             'trimester': (current_week - 1) // 13 + 1,
             'current_week_guide': {
+                'id': guide.id,
+                'week': guide.week,
                 'title': guide.title,
                 'baby_development': guide.baby_development,
                 'mother_changes': guide.mother_changes,
@@ -1232,6 +1395,7 @@ def get_maternity_guide_for_week(week):
             return jsonify({'error': 'Guide for the specified week not found.'}), 404
 
         return jsonify({
+            'id': guide.id,
             'week': guide.week,
             'title': guide.title,
             'baby_development': guide.baby_development,
@@ -1242,6 +1406,57 @@ def get_maternity_guide_for_week(week):
     except Exception as e:
         logger.error(f"Error fetching maternity guide for week {week}: {str(e)}")
         return jsonify({'error': f'Error fetching guide: {str(e)}'}), 500
+
+# NEW: Edit and Delete maternity guide endpoints
+@app.route('/api/maternity/guide/<int:guide_id>', methods=['PUT', 'DELETE', 'OPTIONS'])
+def manage_maternity_guide(guide_id):
+    if request.method == 'OPTIONS':
+        logger.debug("Handling OPTIONS request for /api/maternity/guide")
+        return make_response('', 200)
+
+    try:
+        guide = db.session.get(MaternityGuide, guide_id)
+        if not guide:
+            logger.warning(f"Maternity guide not found: ID {guide_id}")
+            return jsonify({'error': 'Maternity guide not found'}), 404
+
+        if request.method == 'PUT':
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided for update'}), 400
+
+            # Update guide fields
+            guide.title = data.get('title', guide.title)
+            guide.baby_development = data.get('baby_development', guide.baby_development)
+            guide.mother_changes = data.get('mother_changes', guide.mother_changes)
+            guide.tips = data.get('tips', guide.tips)
+            guide.image_url = data.get('image_url', guide.image_url)
+
+            db.session.commit()
+            logger.info(f"Maternity guide updated: ID {guide_id}")
+            return jsonify({
+                'message': 'Maternity guide updated successfully',
+                'guide': {
+                    'id': guide.id,
+                    'week': guide.week,
+                    'title': guide.title,
+                    'baby_development': guide.baby_development,
+                    'mother_changes': guide.mother_changes,
+                    'tips': guide.tips,
+                    'image_url': guide.image_url
+                }
+            }), 200
+
+        if request.method == 'DELETE':
+            db.session.delete(guide)
+            db.session.commit()
+            logger.info(f"Maternity guide deleted: ID {guide_id}")
+            return jsonify({'message': 'Maternity guide deleted successfully'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Failed to manage maternity guide {guide_id}: {str(e)}")
+        return jsonify({'error': f'Failed to manage maternity guide: {str(e)}'}), 500
 
 @app.route('/api/maternity/<int:user_id>/symptoms', methods=['POST', 'GET'])
 def manage_pregnancy_symptoms(user_id):
@@ -1490,6 +1705,21 @@ def server_error(error):
 @socketio.on('connect')
 def handle_connect():
     logger.debug(f"WebSocket client connected from {request.headers.get('Origin')}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.debug("WebSocket client disconnected")
+
+@socketio.on('join_room')
+def handle_join_room(data):
+    """Allow users to join their personal room for SOS notifications"""
+    try:
+        user_id = data.get('user_id')
+        if user_id:
+            join_room(str(user_id))
+            logger.info(f"User {user_id} joined their notification room")
+    except Exception as e:
+        logger.error(f"Error joining room: {str(e)}")
 
 @socketio.on('error')
 def handle_error(error):

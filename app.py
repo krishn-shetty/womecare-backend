@@ -249,14 +249,42 @@ def populate_maternity_guide():
     """Populates the database with sample maternity guide data."""
     if db.session.query(MaternityGuide).count() == 0:
         logger.info("Populating Maternity Guide data...")
-        guides = [
-            {'week': 4, 'title': 'Week 4: The Poppy Seed', 'baby_development': 'Your baby is the size of a poppy seed. The neural tube, the building block of the spine and brain, is already forming.', 'mother_changes': 'You might not feel pregnant yet, but your body is working hard. A missed period is often the first sign.', 'tips': 'Start taking a prenatal vitamin with folic acid. Avoid alcohol and smoking.'},
-            {'week': 8, 'title': 'Week 8: The Raspberry', 'baby_development': 'Your baby is now about the size of a raspberry. They are constantly moving, though you can\'t feel it yet. Tiny fingers and toes are forming.', 'mother_changes': 'Morning sickness and fatigue may be at their peak. Your breasts may feel fuller and more tender.', 'tips': 'Eat small, frequent meals to combat nausea. Get plenty of rest.'},
-            {'week': 12, 'title': 'Week 12: The Plum', 'baby_development': 'Your baby is about the size of a plum. All major organs are formed and functioning. The baby can now squint, frown, and suck its thumb.', 'mother_changes': 'Good news! Morning sickness might be subsiding. You might start to show a small baby bump.', 'tips': 'Start doing Kegel exercises to strengthen your pelvic floor. Consider sharing your news with friends and family.'},
-            {'week': 20, 'title': 'Week 20: The Banana', 'baby_development': 'Halfway there! Your baby is about the size of a banana. You may be able to feel their first movements, called quickening.', 'mother_changes': 'Your baby bump is more prominent. You might experience an energy boost during this second trimester.', 'tips': 'Have your mid-pregnancy ultrasound. Start thinking about childbirth classes.'},
-            {'week': 30, 'title': 'Week 30: The Cabbage', 'baby_development': 'Your baby is about the size of a large cabbage. Their brain is developing rapidly. They can open and close their eyes.', 'mother_changes': 'You may feel more out of breath as your uterus pushes against your diaphragm. Backaches are common.', 'tips': 'Sleep on your side with pillows for support. Stay hydrated to prevent Braxton Hicks contractions.'},
-            {'week': 40, 'title': 'Week 40: The Watermelon', 'baby_development': 'Your baby is fully developed and ready for birth, about the size of a small watermelon. They are in the head-down position.', 'mother_changes': 'You are full-term! You might feel a mix of excitement and impatience. Look out for signs of labor.', 'tips': 'Rest as much as you can. Pack your hospital bag. Practice your breathing techniques.'}
+        guides = []
+        # Weeks 1 to 10
+        week_info_1_to_10 = [
+            {'week': 1, 'title': 'Week 1: The Starting Line', 'baby_development': 'Technically, pregnancy is counted from the first day of your last period. No baby yet — ovulation will occur later.', 'mother_changes': 'Your body is preparing for ovulation.', 'tips': 'Maintain a healthy diet and track your cycle.'},
+            {'week': 2, 'title': 'Week 2: Ovulation Approaches', 'baby_development': 'Egg is maturing in your ovary.', 'mother_changes': 'You might notice increased cervical mucus.', 'tips': 'Have a balanced diet rich in protein.'},
+            {'week': 3, 'title': 'Week 3: Fertilization', 'baby_development': 'Fertilization happens! Your baby is now a tiny ball of cells.', 'mother_changes': 'You won’t notice physical changes yet.', 'tips': 'Avoid alcohol and smoking.'},
+            {'week': 4, 'title': 'Week 4: The Poppy Seed', 'baby_development': 'Your baby is the size of a poppy seed. Neural tube starts forming.', 'mother_changes': 'A missed period might be the first sign.', 'tips': 'Start prenatal vitamins with folic acid.'},
+            {'week': 5, 'title': 'Week 5: The Sesame Seed', 'baby_development': 'Heart starts beating. Major organs begin forming.', 'mother_changes': 'Morning sickness may start.', 'tips': 'Eat small, frequent meals.'},
+            {'week': 6, 'title': 'Week 6: The Lentil', 'baby_development': 'Facial features begin forming.', 'mother_changes': 'Fatigue and nausea are common.', 'tips': 'Stay hydrated and rest often.'},
+            {'week': 7, 'title': 'Week 7: The Blueberry', 'baby_development': 'Hands and feet start developing.', 'mother_changes': 'You may notice breast tenderness.', 'tips': 'Wear a supportive bra.'},
+            {'week': 8, 'title': 'Week 8: The Raspberry', 'baby_development': 'Tiny fingers and toes are forming.', 'mother_changes': 'Morning sickness may peak.', 'tips': 'Get plenty of rest.'},
+            {'week': 9, 'title': 'Week 9: The Grape', 'baby_development': 'Baby’s tail disappears, looking more human.', 'mother_changes': 'Possible mood swings.', 'tips': 'Practice relaxation techniques.'},
+            {'week': 10, 'title': 'Week 10: The Strawberry', 'baby_development': 'Vital organs are now fully formed.', 'mother_changes': 'Nausea may start to ease.', 'tips': 'Begin light prenatal exercise.'},
         ]
+        guides.extend(week_info_1_to_10)
+        # Random 5 weeks from 11–40
+        random_weeks = random.sample(range(11, 41), 5)
+        week_info_extra = {
+            12: {'title': 'Week 12: The Plum', 'baby_development': 'Baby can squint and suck its thumb.', 'mother_changes': 'Morning sickness might ease.', 'tips': 'Consider sharing your news.'},
+            20: {'title': 'Week 20: The Banana', 'baby_development': 'Halfway there! First movements felt.', 'mother_changes': 'Energy boost in 2nd trimester.', 'tips': 'Schedule mid-pregnancy ultrasound.'},
+            25: {'title': 'Week 25: The Cauliflower', 'baby_development': 'Lungs developing air sacs.', 'mother_changes': 'Possible backaches.', 'tips': 'Maintain good posture.'},
+            30: {'title': 'Week 30: The Cabbage', 'baby_development': 'Brain developing rapidly.', 'mother_changes': 'Shortness of breath possible.', 'tips': 'Sleep on your side.'},
+            35: {'title': 'Week 35: The Honeydew Melon', 'baby_development': 'Baby gains weight quickly.', 'mother_changes': 'Braxton Hicks contractions.', 'tips': 'Pack your hospital bag.'},
+            40: {'title': 'Week 40: The Watermelon', 'baby_development': 'Fully developed and ready for birth.', 'mother_changes': 'Full-term! Watch for labor signs.', 'tips': 'Rest and stay prepared.'}
+        }
+        for wk in random_weeks:
+            if wk in week_info_extra:
+                data = week_info_extra[wk]
+                guides.append({
+                    'week': wk,
+                    'title': data['title'],
+                    'baby_development': data['baby_development'],
+                    'mother_changes': data['mother_changes'],
+                    'tips': data['tips']
+                })
+        # Save to DB
         for guide_data in guides:
             guide = MaternityGuide(**guide_data)
             db.session.add(guide)

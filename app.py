@@ -31,6 +31,13 @@ from email import encoders
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from flask_sqlalchemy import SQLAlchemy
+
+db = SQLAlchemy()
+UTC = ZoneInfo("UTC")
+
 
 # Configure logging
 # ---------------------------------------------------
@@ -130,8 +137,14 @@ EMAIL_CONFIG = {
 Maps_API_KEY = os.getenv('Maps_API_KEY')
 
 # --- Database Models ---
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from flask_sqlalchemy import SQLAlchemy
+
+UTC = ZoneInfo("UTC")
+
 class User(db.Model):
-    __tablename__ = 'user'
+    __tablename__ = 'users'  # changed from 'user'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
@@ -144,7 +157,7 @@ class User(db.Model):
 class EmergencyContact(db.Model):
     __tablename__ = 'emergency_contact'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     name = db.Column(db.String(100), nullable=False)
     relationship = db.Column(db.String(50))
     phone = db.Column(db.String(15), nullable=False)
@@ -154,7 +167,7 @@ class EmergencyContact(db.Model):
 class Guardian(db.Model):
     __tablename__ = 'guardian'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     name = db.Column(db.String(100), nullable=False)
     relationship = db.Column(db.String(50))
     phone = db.Column(db.String(15), nullable=False)
@@ -164,7 +177,7 @@ class Guardian(db.Model):
 class LocationLog(db.Model):
     __tablename__ = 'location_log'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     latitude = db.Column(db.Float, nullable=False)
     longitude = db.Column(db.Float, nullable=False)
     accuracy = db.Column(db.Float)
@@ -179,7 +192,7 @@ class LocationLog(db.Model):
 class MedicationReminder(db.Model):
     __tablename__ = 'medication_reminder'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     medication_name = db.Column(db.String(100), nullable=False)
     dosage = db.Column(db.String(50))
     frequency = db.Column(db.String(50))
@@ -192,7 +205,7 @@ class MedicationReminder(db.Model):
 class PeriodTracker(db.Model):
     __tablename__ = 'period_tracker'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     cycle_start_date = db.Column(db.Date, nullable=False)
     cycle_length = db.Column(db.Integer, default=28)
     period_length = db.Column(db.Integer, default=5)
@@ -204,7 +217,7 @@ class PeriodTracker(db.Model):
 class SOSAlert(db.Model):
     __tablename__ = 'sos_alert'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     alert_type = db.Column(db.String(50), nullable=False)
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
@@ -216,18 +229,15 @@ class SOSAlert(db.Model):
     resolved_at = db.Column(db.DateTime)
     resolution_notes = db.Column(db.Text)
 
-# MERGED FEATURE: Maternity Models
+# --- Maternity Models ---
 class PregnancyTracker(db.Model):
     __tablename__ = 'pregnancy_tracker'
-
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, unique=True)  # corrected table name
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)  # updated FK
     last_menstrual_period = db.Column(db.Date, nullable=False)
     due_date = db.Column(db.Date, nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(ZoneInfo('UTC')))
-
-    # Optional: relationship to access user directly
     user = db.relationship('User', backref=db.backref('pregnancy_tracker', uselist=False))
 
 class MaternityGuide(db.Model):
@@ -245,7 +255,7 @@ class PregnancySymptom(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     pregnancy_id = db.Column(db.Integer, db.ForeignKey('pregnancy_tracker.id'), nullable=False)
     symptom_name = db.Column(db.String(100), nullable=False)
-    severity = db.Column(db.Integer) # e.g., 1 to 5
+    severity = db.Column(db.Integer)
     notes = db.Column(db.Text)
     log_date = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
 
@@ -266,14 +276,14 @@ class Contraction(db.Model):
     duration_seconds = db.Column(db.Integer)
     frequency_minutes = db.Column(db.Integer)
 
-# MERGED FEATURE: Community Forum Models
+# --- Community Forum Models ---
 class CommunityPost(db.Model):
     __tablename__ = 'community_post'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    category = db.Column(db.String(50)) # e.g., Pregnancy, Health, Support
+    category = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
     updated_at = db.Column(db.DateTime, onupdate=lambda: datetime.now(UTC))
 
@@ -281,11 +291,9 @@ class CommunityComment(db.Model):
     __tablename__ = 'community_comment'
     id = db.Column(db.Integer, primary_key=True)
     post_id = db.Column(db.Integer, db.ForeignKey('community_post.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
-
-import random
 
 # --- Helper Functions ---
 def populate_maternity_guide():

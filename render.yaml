@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: womecare-api
+    env: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install --only-binary=all -r requirements.txt || pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py app:app
+    port: 10000  # Explicitly set to match Gunicorn binding
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.5

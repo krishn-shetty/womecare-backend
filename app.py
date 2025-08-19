@@ -1565,8 +1565,8 @@ def ensure_db_initialized():
     """Ensure database is initialized when the app is imported"""
     try:
         with app.app_context():
-            # Check if users table exists
-            result = db.session.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')")
+            # Check if users table exists using proper SQLAlchemy text()
+            result = db.session.execute(text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'users')"))
             table_exists = result.scalar()
             
             if not table_exists:
@@ -1576,6 +1576,12 @@ def ensure_db_initialized():
                 logger.info("Database tables already exist")
     except Exception as e:
         logger.warning(f"Database initialization check failed: {str(e)}")
+        # If check fails, try to initialize anyway
+        try:
+            logger.info("Attempting database initialization despite check failure...")
+            init_db()
+        except Exception as init_error:
+            logger.error(f"Database initialization also failed: {str(init_error)}")
 
 # Run database initialization check
 ensure_db_initialized()

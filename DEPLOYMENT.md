@@ -8,18 +8,25 @@ The error `relation "users" does not exist` occurs because the database tables h
 
 To fix the current deployment issue:
 
-1. **In Railway Console**: Run the database initialization script
+1. **In Railway Console**: Run the simple table creation script
+   ```bash
+   python create_tables.py
+   ```
+
+2. **Or run the full initialization script**:
    ```bash
    python init_db.py
    ```
 
-2. **Or manually run migrations**:
+3. **Or manually run migrations**:
    ```bash
    export FLASK_APP=app.py
    flask db upgrade
    ```
 
-3. **Restart the application** after database initialization
+4. **Restart the application** after database initialization
+
+**Note**: The `create_tables.py` script is the simplest solution and should work immediately.
 
 ## Solutions
 

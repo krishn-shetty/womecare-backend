@@ -27,6 +27,18 @@ def run_migrations():
         logger.error(f"Failed to run migrations: {str(e)}")
         return False
 
+def create_tables_directly():
+    """Create tables directly using SQLAlchemy create_all()"""
+    try:
+        logger.info("Creating tables directly...")
+        with app.app_context():
+            db.create_all()
+        logger.info("Tables created successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create tables directly: {str(e)}")
+        return False
+
 def initialize_database():
     """Initialize database with tables and sample data"""
     try:
@@ -70,10 +82,16 @@ def main():
     migration_success = run_migrations()
     
     if not migration_success:
-        logger.warning("Migrations failed, trying direct database initialization...")
-        init_success = initialize_database()
-        if not init_success:
-            logger.error("Both migrations and direct initialization failed")
+        logger.warning("Migrations failed, trying direct table creation...")
+        table_creation_success = create_tables_directly()
+        
+        if table_creation_success:
+            logger.info("Tables created successfully, now populating sample data...")
+            init_success = initialize_database()
+            if not init_success:
+                logger.warning("Sample data population failed, but tables are created")
+        else:
+            logger.error("Both migrations and direct table creation failed")
             sys.exit(1)
     
     logger.info("Database setup completed successfully")

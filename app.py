@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 import os
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ import logging
 import json
 import jwt
 import bcrypt
+import random
 
 from twilio.rest import Client
 from geopy.geocoders import Nominatim
@@ -37,7 +39,6 @@ from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 UTC = ZoneInfo("UTC")
-
 
 # Configure logging
 # ---------------------------------------------------
@@ -68,10 +69,22 @@ app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-default-secret-key')
 
+# Add connection pool settings for better PostgreSQL handling
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 10,
+    'pool_recycle': 120,
+    'pool_pre_ping': True,
+    'pool_timeout': 30,
+    'connect_args': {
+        'sslmode': 'require',
+        'connect_timeout': 10
+    } if database_url.startswith('postgresql://') else {}
+}
+
 # ---------------------------------------------------
 # Initialize SQLAlchemy and Migrate
 # ---------------------------------------------------
-db = SQLAlchemy(app)
+db.init_app(app)
 migrate = Migrate(app, db)
 
 # ---------------------------------------------------
@@ -119,8 +132,6 @@ socketio = SocketIO(app, cors_allowed_origins=[
 def home():
     return "🚀 Flask server running locally on port 5001"
 
-
-
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),
     'auth_token': os.getenv('TWILIO_AUTH_TOKEN'),
@@ -144,7 +155,7 @@ from flask_sqlalchemy import SQLAlchemy
 UTC = ZoneInfo("UTC")
 
 class User(db.Model):
-    __tablename__ = 'users'  # changed from 'user'
+    __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
@@ -157,7 +168,7 @@ class User(db.Model):
 class EmergencyContact(db.Model):
     __tablename__ = 'emergency_contact'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     relationship = db.Column(db.String(50))
     phone = db.Column(db.String(15), nullable=False)
@@ -167,7 +178,7 @@ class EmergencyContact(db.Model):
 class Guardian(db.Model):
     __tablename__ = 'guardian'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     relationship = db.Column(db.String(50))
     phone = db.Column(db.String(15), nullable=False)
@@ -177,7 +188,7 @@ class Guardian(db.Model):
 class LocationLog(db.Model):
     __tablename__ = 'location_log'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     latitude = db.Column(db.Float, nullable=False)
     longitude = db.Column(db.Float, nullable=False)
     accuracy = db.Column(db.Float)
@@ -192,7 +203,7 @@ class LocationLog(db.Model):
 class MedicationReminder(db.Model):
     __tablename__ = 'medication_reminder'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     medication_name = db.Column(db.String(100), nullable=False)
     dosage = db.Column(db.String(50))
     frequency = db.Column(db.String(50))
@@ -205,7 +216,7 @@ class MedicationReminder(db.Model):
 class PeriodTracker(db.Model):
     __tablename__ = 'period_tracker'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     cycle_start_date = db.Column(db.Date, nullable=False)
     cycle_length = db.Column(db.Integer, default=28)
     period_length = db.Column(db.Integer, default=5)
@@ -217,7 +228,7 @@ class PeriodTracker(db.Model):
 class SOSAlert(db.Model):
     __tablename__ = 'sos_alert'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     alert_type = db.Column(db.String(50), nullable=False)
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
@@ -233,7 +244,7 @@ class SOSAlert(db.Model):
 class PregnancyTracker(db.Model):
     __tablename__ = 'pregnancy_tracker'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
     last_menstrual_period = db.Column(db.Date, nullable=False)
     due_date = db.Column(db.Date, nullable=False)
     is_active = db.Column(db.Boolean, default=True)
@@ -280,7 +291,7 @@ class Contraction(db.Model):
 class CommunityPost(db.Model):
     __tablename__ = 'community_post'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
     category = db.Column(db.String(50))
@@ -291,7 +302,7 @@ class CommunityComment(db.Model):
     __tablename__ = 'community_comment'
     id = db.Column(db.Integer, primary_key=True)
     post_id = db.Column(db.Integer, db.ForeignKey('community_post.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # updated FK
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(UTC))
 
@@ -307,13 +318,13 @@ def populate_maternity_guide():
         week_info_1_to_10 = [
             {'week': 1, 'title': 'Week 1: The Starting Line', 'baby_development': 'Technically, pregnancy is counted from the first day of your last period. No baby yet — ovulation will occur later.', 'mother_changes': 'Your body is preparing for ovulation.', 'tips': 'Maintain a healthy diet and track your cycle.'},
             {'week': 2, 'title': 'Week 2: Ovulation Approaches', 'baby_development': 'Egg is maturing in your ovary.', 'mother_changes': 'You might notice increased cervical mucus.', 'tips': 'Have a balanced diet rich in protein.'},
-            {'week': 3, 'title': 'Week 3: Fertilization', 'baby_development': 'Fertilization happens! Your baby is now a tiny ball of cells.', 'mother_changes': 'You won’t notice physical changes yet.', 'tips': 'Avoid alcohol and smoking.'},
+            {'week': 3, 'title': 'Week 3: Fertilization', 'baby_development': 'Fertilization happens! Your baby is now a tiny ball of cells.', 'mother_changes': "You won't notice physical changes yet.", 'tips': 'Avoid alcohol and smoking.'},
             {'week': 4, 'title': 'Week 4: The Poppy Seed', 'baby_development': 'Your baby is the size of a poppy seed. Neural tube starts forming.', 'mother_changes': 'A missed period might be the first sign.', 'tips': 'Start prenatal vitamins with folic acid.'},
             {'week': 5, 'title': 'Week 5: The Sesame Seed', 'baby_development': 'Heart starts beating. Major organs begin forming.', 'mother_changes': 'Morning sickness may start.', 'tips': 'Eat small, frequent meals.'},
             {'week': 6, 'title': 'Week 6: The Lentil', 'baby_development': 'Facial features begin forming.', 'mother_changes': 'Fatigue and nausea are common.', 'tips': 'Stay hydrated and rest often.'},
             {'week': 7, 'title': 'Week 7: The Blueberry', 'baby_development': 'Hands and feet start developing.', 'mother_changes': 'You may notice breast tenderness.', 'tips': 'Wear a supportive bra.'},
             {'week': 8, 'title': 'Week 8: The Raspberry', 'baby_development': 'Tiny fingers and toes are forming.', 'mother_changes': 'Morning sickness may peak.', 'tips': 'Get plenty of rest.'},
-            {'week': 9, 'title': 'Week 9: The Grape', 'baby_development': 'Baby’s tail disappears, looking more human.', 'mother_changes': 'Possible mood swings.', 'tips': 'Practice relaxation techniques.'},
+            {'week': 9, 'title': 'Week 9: The Grape', 'baby_development': "Baby's tail disappears, looking more human.", 'mother_changes': 'Possible mood swings.', 'tips': 'Practice relaxation techniques.'},
             {'week': 10, 'title': 'Week 10: The Strawberry', 'baby_development': 'Vital organs are now fully formed.', 'mother_changes': 'Nausea may start to ease.', 'tips': 'Begin light prenatal exercise.'},
         ]
         guides.extend(week_info_1_to_10)
@@ -344,18 +355,80 @@ def populate_maternity_guide():
         for guide_data in guides:
             guide = MaternityGuide(**guide_data)
             db.session.add(guide)
-        db.session.commit()
-        logger.info("Maternity Guide data populated.")
+        
+        try:
+            db.session.commit()
+            logger.info("Maternity Guide data populated.")
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Failed to populate maternity guide: {str(e)}")
+
+def test_db_connection():
+    """Test database connection and create tables if needed."""
+    try:
+        with app.app_context():
+            # Test connection
+            db.session.execute(text('SELECT 1'))
+            logger.info("Database connection successful")
+            return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {str(e)}")
+        return False
 
 def init_db():
+    """Initialize database with better error handling and retry logic."""
+    max_retries = 3
+    retry_delay = 2
+    
     with app.app_context():
-        try:
-            db.create_all()
-            logger.info("Database initialized successfully")
-            populate_maternity_guide()
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {str(e)}")
-            raise
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Database initialization attempt {attempt + 1}/{max_retries}")
+                
+                # Test connection first
+                if not test_db_connection():
+                    raise Exception("Database connection test failed")
+                
+                # Create all tables
+                db.create_all()
+                logger.info("Database tables created successfully")
+                
+                # Populate sample data
+                populate_maternity_guide()
+                
+                logger.info("Database initialized successfully")
+                return True
+                
+            except Exception as e:
+                logger.error(f"Database initialization attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Retrying in {retry_delay} seconds...")
+                    import time
+                    time.sleep(retry_delay)
+                else:
+                    logger.error("All database initialization attempts failed")
+                    raise e
+
+# Health check endpoint
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Railway deployment"""
+    try:
+        # Test database connection
+        db.session.execute(text('SELECT 1'))
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'timestamp': datetime.now(UTC).isoformat()
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({
+            'status': 'unhealthy',
+            'database': 'disconnected',
+            'error': str(e),
+            'timestamp': datetime.now(UTC).isoformat()
+        }), 500
 
 def validate_location_data(data):
     if not all(key in data for key in ['latitude', 'longitude']):
@@ -631,47 +704,69 @@ def create_user():
         logger.debug("Handling OPTIONS request for /api/users")
         return make_response('', 200)
 
-    try:
-        data = request.get_json()
-        if not data or not all(key in data for key in ['name', 'email', 'phone']):
-            logger.warning(f"Invalid user creation request: {data}")
-            return jsonify({'error': 'Missing required fields: name, email, phone'}), 400
+    max_retries = 3
+    retry_delay = 1
 
-        user = User(
-            name=data['name'],
-            email=data['email'],
-            phone=data['phone'],
-            age=data.get('age'),
-            blood_group=data.get('blood_group'),
-            medical_conditions=data.get('medical_conditions')
-        )
-        db.session.add(user)
-        db.session.commit()
-        logger.info(f"User created: ID {user.id}, Email {user.email}")
+    for attempt in range(max_retries):
+        try:
+            data = request.get_json()
+            if not data or not all(key in data for key in ['name', 'email', 'phone']):
+                logger.warning(f"Invalid user creation request: {data}")
+                return jsonify({'error': 'Missing required fields: name, email, phone'}), 400
 
-        token_payload = {
-            'user_id': user.id,
-            'exp': datetime.now(UTC) + timedelta(days=1)
-        }
-        token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+            # Clean empty strings to None for optional fields
+            age = data.get('age') if data.get('age') and data.get('age').strip() else None
+            blood_group = data.get('blood_group') if data.get('blood_group') and data.get('blood_group').strip() else None
+            medical_conditions = data.get('medical_conditions') if data.get('medical_conditions') and data.get('medical_conditions').strip() else None
 
-        return jsonify({
-            'message': 'User created successfully',
-            'user_id': user.id,
-            'token': token,
-            'user': {
-                'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
-                'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
+            user = User(
+                name=data['name'].strip(),
+                email=data['email'].strip().lower(),
+                phone=data['phone'].strip(),
+                age=int(age) if age else None,
+                blood_group=blood_group,
+                medical_conditions=medical_conditions
+            )
+            
+            db.session.add(user)
+            db.session.commit()
+            
+            logger.info(f"User created successfully: ID {user.id}, Email {user.email}")
+
+            token_payload = {
+                'user_id': user.id,
+                'exp': datetime.now(UTC) + timedelta(days=1)
             }
-        }), 201
-    except IntegrityError:
-        db.session.rollback()
-        logger.warning(f"Email already exists: {data.get('email')}")
-        return jsonify({'error': 'Email already exists'}), 400
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"User creation error: {str(e)}")
-        return jsonify({'error': f'Failed to create user: {str(e)}'}), 500
+            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+
+            return jsonify({
+                'message': 'User created successfully',
+                'user_id': user.id,
+                'token': token,
+                'user': {
+                    'id': user.id, 'name': user.name, 'email': user.email, 'phone': user.phone,
+                    'age': user.age, 'blood_group': user.blood_group, 'medical_conditions': user.medical_conditions
+                }
+            }), 201
+            
+        except IntegrityError as e:
+            db.session.rollback()
+            logger.warning(f"Email already exists: {data.get('email')}")
+            return jsonify({'error': 'Email already exists'}), 400
+            
+        except Exception as e:
+            db.session.rollback()
+            error_msg = str(e)
+            logger.error(f"User creation attempt {attempt + 1} failed: {error_msg}")
+            
+            # Check if it's a connection issue that should be retried
+            if any(keyword in error_msg.lower() for keyword in ['ssl', 'eof', 'connection', 'timeout']) and attempt < max_retries - 1:
+                logger.info(f"Retrying user creation in {retry_delay} seconds...")
+                import time
+                time.sleep(retry_delay)
+                continue
+            else:
+                return jsonify({'error': f'Failed to create user: {error_msg}'}), 500
 
 @app.route('/api/users/email/<string:email>', methods=['GET'])
 def check_email(email):
@@ -930,35 +1025,6 @@ def update_live_location(user_id):
         logger.error(f"Location update error for user {user_id}: {str(e)}")
         return jsonify({'error': f'Error updating location: {str(e)}'}), 500
 
-@app.route('/api/location/<int:user_id>/track', methods=['POST'])
-def start_location_tracking(user_id):
-    try:
-        data = request.get_json() or {}
-        tracking_interval = data.get('interval', 30)
-        high_accuracy = data.get('high_accuracy', True)
-
-        logger.info(f"Location tracking started for user {user_id}")
-        return jsonify({
-            'message': 'Location tracking started',
-            'config': {
-                'interval': tracking_interval,
-                'high_accuracy': high_accuracy,
-                'user_id': user_id
-            },
-            'instructions': {
-                'client_side': 'Use navigator.geolocation.watchPosition()',
-                'update_endpoint': f'/api/location/{user_id}/live',
-                'recommended_options': {
-                    'enableHighAccuracy': high_accuracy,
-                    'timeout': 10000,
-                    'maximumAge': 5000
-                }
-            }
-        }), 200
-    except Exception as e:
-        logger.error(f"Location tracking error for user {user_id}: {str(e)}")
-        return jsonify({'error': f'Error starting location tracking: {str(e)}'}), 500
-
 @app.route('/api/sos/<int:user_id>', methods=['POST'])
 def trigger_sos(user_id):
     try:
@@ -1063,184 +1129,7 @@ def trigger_sos(user_id):
         logger.error(f"SOS trigger error for user {user.id}: {str(e)}")
         return jsonify({'error': f'Error triggering SOS: {str(e)}'}), 500
 
-@app.route('/api/sos/<int:user_id>/status/<int:alert_id>', methods=['PUT'])
-def update_sos_status(user_id, alert_id):
-    try:
-        data = request.get_json()
-        if not data or 'status' not in data:
-            return jsonify({'error': 'Missing required field: status'}), 400
-
-        valid_statuses = ['active', 'resolved', 'false_alarm', 'acknowledged']
-        if data['status'] not in valid_statuses:
-            return jsonify({'error': f'Invalid status. Must be one of: {valid_statuses}'}), 400
-
-        sos_alert = db.session.query(SOSAlert).filter_by(id=alert_id, user_id=user_id).first()
-        if not sos_alert:
-            return jsonify({'error': 'SOS alert not found'}), 404
-
-        sos_alert.status = data['status']
-        sos_alert.resolved_at = datetime.now(UTC) if data['status'] in ['resolved', 'false_alarm'] else None
-        sos_alert.resolution_notes = data.get('notes')
-        db.session.commit()
-
-        socketio.emit('sos_status_update', {
-            'alert_id': sos_alert.id,
-            'user_id': user_id,
-            'status': sos_alert.status,
-            'resolved_at': sos_alert.resolved_at.isoformat() if sos_alert.resolved_at else None,
-            'notes': sos_alert.resolution_notes
-        })
-        logger.info(f"SOS status update emitted via Socket.IO for alert {alert_id}")
-
-        return jsonify({
-            'message': 'SOS alert status updated',
-            'alert_id': alert_id,
-            'status': sos_alert.status,
-            'resolved_at': sos_alert.resolved_at.isoformat() if sos_alert.resolved_at else None
-        }), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"SOS status update error: {str(e)}")
-        return jsonify({'error': f'Error updating SOS status: {str(e)}'}), 500
-
-@app.route('/api/location/<int:user_id>/history', methods=['GET'])
-def get_location_history(user_id):
-    try:
-        limit = request.args.get('limit', 100, type=int)
-        hours = request.args.get('hours', 24, type=int)
-        high_accuracy_only = request.args.get('high_accuracy_only', 'false').lower() == 'true'
-
-        query = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
-            LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=hours)
-        )
-        if high_accuracy_only:
-            query = query.filter(LocationLog.is_high_accuracy == True)
-        locations = query.order_by(LocationLog.timestamp.desc()).limit(limit).all()
-
-        location_data = [{
-            'id': loc.id, 'latitude': loc.latitude, 'longitude': loc.longitude, 'accuracy': loc.accuracy,
-            'accuracy_description': get_accuracy_description(loc.accuracy), 'altitude': loc.altitude,
-            'heading': loc.heading, 'speed': loc.speed, 'address': loc.address,
-            'location_source': loc.location_source, 'timestamp': loc.timestamp.isoformat()
-        } for loc in locations]
-
-        logger.info(f"Location history fetched for user {user_id}: {len(location_data)} records")
-        return jsonify({
-            'locations': location_data,
-            'count': len(location_data),
-            'filters': {'hours': hours, 'limit': limit, 'high_accuracy_only': high_accuracy_only}
-        }), 200
-    except Exception as e:
-        logger.error(f"Location history error for user {user_id}: {str(e)}")
-        return jsonify({'error': f'Error fetching location history: {str(e)}'}), 500
-
-@app.route('/api/location/<int:user_id>/route', methods=['GET'])
-def get_location_route(user_id):
-    try:
-        hours = request.args.get('hours', 24, type=int)
-        simplify = request.args.get('simplify', 'true').lower() == 'true'
-
-        locations = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
-            LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=hours)
-        ).order_by(LocationLog.timestamp.asc()).all()
-
-        if not locations:
-            logger.warning(f"No location data found for user {user_id}")
-            return jsonify({'error': 'No location data found'}), 404
-
-        route_points = [{
-            'lat': loc.latitude, 'lng': loc.longitude, 'timestamp': loc.timestamp.isoformat(),
-            'accuracy': loc.accuracy, 'address': loc.address
-        } for loc in locations]
-
-        if simplify and len(route_points) > 2:
-            simplified = [route_points[0]]
-            for i in range(1, len(route_points) - 1):
-                prev_point = simplified[-1]
-                curr_point = route_points[i]
-                lat_diff = abs(curr_point['lat'] - prev_point['lat'])
-                lng_diff = abs(curr_point['lng'] - prev_point['lng'])
-                if lat_diff > 0.0001 or lng_diff > 0.0001:
-                    simplified.append(curr_point)
-            simplified.append(route_points[-1])
-            route_points = simplified
-
-        total_distance = 0
-        if len(route_points) > 1:
-            for i in range(1, len(route_points)):
-                lat_diff = route_points[i]['lat'] - route_points[i-1]['lat']
-                lng_diff = route_points[i]['lng'] - route_points[i-1]['lng']
-                distance = ((lat_diff ** 2 + lng_diff ** 2) ** 0.5) * 111000
-                total_distance += distance
-
-        logger.info(f"Route generated for user {user_id}: {len(route_points)} points")
-        return jsonify({
-            'route_points': route_points,
-            'statistics': {
-                'total_points': len(route_points), 'original_points': len(locations), 'simplified': simplify,
-                'time_span_hours': hours, 'estimated_distance_meters': round(total_distance, 2),
-                'start_time': locations[0].timestamp.isoformat() if locations else None,
-                'end_time': locations[-1].timestamp.isoformat() if locations else None
-            },
-            'bounds': {
-                'north': max(point['lat'] for point in route_points) if route_points else None,
-                'south': min(point['lat'] for point in route_points) if route_points else None,
-                'east': max(point['lng'] for point in route_points) if route_points else None,
-                'west': min(point['lng'] for point in route_points) if route_points else None
-            }
-        }), 200
-    except Exception as e:
-        logger.error(f"Route generation error for user {user_id}: {str(e)}")
-        return jsonify({'error': f'Error generating route: {str(e)}'}), 500
-
 # --- Period Tracker Endpoints ---
-@app.route('/api/period-tracker/<int:user_id>/history', methods=['GET'])
-def get_period_history(user_id):
-    try:
-        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).all()
-
-        return jsonify({
-            'periods': [{
-                'id': p.id, 'cycle_start_date': p.cycle_start_date.isoformat(), 'cycle_length': p.cycle_length,
-                'period_length': p.period_length, 'flow_intensity': p.flow_intensity, 'symptoms': p.symptoms,
-                'mood': p.mood, 'notes': p.notes
-            } for p in periods]
-        }), 200
-    except Exception as e:
-        logger.error(f"Period history error for user {user_id}: {str(e)}")
-        return jsonify({'error': f'Error fetching period history: {str(e)}'}), 500
-
-@app.route('/api/period-tracker/<int:user_id>/predict', methods=['GET'])
-def get_period_prediction(user_id):
-    try:
-        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).limit(3).all()
-
-        if len(periods) < 2:
-            return jsonify({'message': 'Log at least 2 periods to get a prediction.'}), 404
-
-        cycle_lengths = []
-        for i in range(len(periods) - 1):
-            cycle_duration = (periods[i].cycle_start_date - periods[i+1].cycle_start_date).days
-            if cycle_duration > 0:
-                cycle_lengths.append(cycle_duration)
-
-        if not cycle_lengths:
-            return jsonify({'message': 'Not enough data to calculate a reliable cycle length for prediction.'}), 404
-
-        average_cycle_length = sum(cycle_lengths) / len(cycle_lengths)
-
-        last_period_start = periods[0].cycle_start_date
-        predicted_next_period_date = last_period_start + timedelta(days=round(average_cycle_length))
-
-        return jsonify({
-            'predicted_date': predicted_next_period_date.isoformat(),
-            'average_cycle_length': round(average_cycle_length, 1),
-            'message': 'Prediction successful'
-        }), 200
-    except Exception as e:
-        logger.error(f"Period prediction error for user {user_id}: {str(e)}")
-        return jsonify({'error': f'Error generating period prediction: {str(e)}'}), 500
-
 @app.route('/api/period-tracker/<int:user_id>/log', methods=['POST'])
 def log_period(user_id):
     try:
@@ -1266,7 +1155,23 @@ def log_period(user_id):
         logger.error(f"Failed to log period for user {user_id}: {str(e)}")
         return jsonify({'error': f'Failed to log period: {str(e)}'}), 500
 
-# --- MERGED: Maternity Suite Endpoints ---
+@app.route('/api/period-tracker/<int:user_id>/history', methods=['GET'])
+def get_period_history(user_id):
+    try:
+        periods = db.session.query(PeriodTracker).filter_by(user_id=user_id).order_by(PeriodTracker.cycle_start_date.desc()).all()
+
+        return jsonify({
+            'periods': [{
+                'id': p.id, 'cycle_start_date': p.cycle_start_date.isoformat(), 'cycle_length': p.cycle_length,
+                'period_length': p.period_length, 'flow_intensity': p.flow_intensity, 'symptoms': p.symptoms,
+                'mood': p.mood, 'notes': p.notes
+            } for p in periods]
+        }), 200
+    except Exception as e:
+        logger.error(f"Period history error for user {user_id}: {str(e)}")
+        return jsonify({'error': f'Error fetching period history: {str(e)}'}), 500
+
+# --- Maternity Suite Endpoints ---
 @app.route('/api/maternity/<int:user_id>/start', methods=['POST'])
 def start_pregnancy_tracking(user_id):
     """Starts tracking pregnancy for a user based on their last menstrual period."""
@@ -1410,7 +1315,7 @@ def manage_kick_counter(user_id):
 
             start_time = datetime.fromisoformat(data['start_time'])
             end_time = datetime.fromisoformat(data['end_time'])
-            duration = (end_time - start_time).total_seconds() / 60 # in minutes
+            duration = (end_time - start_time).total_seconds() / 60  # in minutes
 
             kick_session = KickCount(
                 pregnancy_id=pregnancy.id,
@@ -1454,7 +1359,7 @@ def manage_contraction_timer(user_id):
             frequency = None
             current_start_time = datetime.now(UTC)
             if last_contraction:
-                frequency = (current_start_time - last_contraction.start_time).total_seconds() / 60 # in minutes
+                frequency = (current_start_time - last_contraction.start_time).total_seconds() / 60  # in minutes
 
             contraction = Contraction(
                 pregnancy_id=pregnancy.id,
@@ -1480,7 +1385,7 @@ def manage_contraction_timer(user_id):
         logger.error(f"Error with contraction timer for user {user_id}: {str(e)}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-# --- MERGED: Community Forum Endpoints ---
+# --- Community Forum Endpoints ---
 @app.route('/api/community/posts', methods=['GET', 'POST', 'OPTIONS'])
 def manage_community_posts():
     if request.method == 'OPTIONS':
@@ -1598,6 +1503,39 @@ def manage_community_comments(post_id):
         logger.error(f"Community comment error for post {post_id}: {str(e)}")
         return jsonify({'error': f'Error managing comment: {str(e)}'}), 500
 
+# --- Additional Location Endpoints ---
+@app.route('/api/location/<int:user_id>/history', methods=['GET'])
+def get_location_history(user_id):
+    try:
+        limit = request.args.get('limit', 100, type=int)
+        hours = request.args.get('hours', 24, type=int)
+        high_accuracy_only = request.args.get('high_accuracy_only', 'false').lower() == 'true'
+
+        query = db.session.query(LocationLog).filter_by(user_id=user_id).filter(
+            LocationLog.timestamp >= datetime.now(UTC) - timedelta(hours=hours)
+        )
+        if high_accuracy_only:
+            query = query.filter(LocationLog.is_high_accuracy == True)
+        locations = query.order_by(LocationLog.timestamp.desc()).limit(limit).all()
+
+        location_data = [{
+            'id': loc.id, 'latitude': loc.latitude, 'longitude': loc.longitude, 'accuracy': loc.accuracy,
+            'accuracy_description': get_accuracy_description(loc.accuracy), 'altitude': loc.altitude,
+            'heading': loc.heading, 'speed': loc.speed, 'address': loc.address,
+            'location_source': loc.location_source, 'timestamp': loc.timestamp.isoformat()
+        } for loc in locations]
+
+        logger.info(f"Location history fetched for user {user_id}: {len(location_data)} records")
+        return jsonify({
+            'locations': location_data,
+            'count': len(location_data),
+            'filters': {'hours': hours, 'limit': limit, 'high_accuracy_only': high_accuracy_only}
+        }), 200
+    except Exception as e:
+        logger.error(f"Location history error for user {user_id}: {str(e)}")
+        return jsonify({'error': f'Error fetching location history: {str(e)}'}), 500
+        
+
 # --- Error Handlers ---
 @app.errorhandler(404)
 def not_found(error):
@@ -1609,14 +1547,15 @@ def server_error(error):
     logger.error(f"500 error: {str(error)} - Requested URL: {request.url}")
     return jsonify({'error': 'Internal server error'}), 500
 
-
 # --- Main Execution ---
 if __name__ == '__main__':
     try:
-        with app.app_context():
-            init_db()
+        # Initialize database with retry logic
+        init_db()
+        
         port = int(os.environ.get("PORT", 5000))
         logger.info(f"Starting Flask server with Socket.IO on port {port}")
-        socketio.run(app, host='0.0.0.0', port=port)
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
+        raise

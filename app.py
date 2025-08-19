@@ -1559,3 +1559,23 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
         raise
+
+# Ensure database is initialized when app is imported
+def ensure_db_initialized():
+    """Ensure database is initialized when the app is imported"""
+    try:
+        with app.app_context():
+            # Check if users table exists
+            result = db.session.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')")
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                logger.info("Users table not found, initializing database...")
+                init_db()
+            else:
+                logger.info("Database tables already exist")
+    except Exception as e:
+        logger.warning(f"Database initialization check failed: {str(e)}")
+
+# Run database initialization check
+ensure_db_initialized()

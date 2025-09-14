@@ -6,34 +6,30 @@ from flask_migrate import Migrate
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
 
-# --- SendGrid Imports for Sending Email ---
-# These replace the old smtplib and email.mime imports
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import (
-    Mail, Attachment, FileContent, FileName,
-    FileType, Disposition
-)
-import base64 # Needed for encoding file attachments for SendGrid
-
-# --- Core & Utility Imports ---
 import os
 from dotenv import load_dotenv
+import smtplib
 import folium
 import requests
 import logging
 import json
 import jwt
+import bcrypt
 import random
 
-# --- Other Service Imports ---
 from twilio.rest import Client
 from geopy.geocoders import Nominatim
+
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -134,22 +130,21 @@ socketio = SocketIO(app, cors_allowed_origins=[
 # Test root route to confirm server is running
 @app.route("/", methods=["GET"])
 def home():
-    return "🚀 Flask server running"
+    return "🚀 Flask server running locally on port 5001"
 
-# --- Twilio Configuration for SMS ---
 TWILIO_CONFIG = {
     'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),
     'auth_token': os.getenv('TWILIO_AUTH_TOKEN'),
     'phone_number': os.getenv('TWILIO_PHONE_NUMBER')
 }
 
-# --- SendGrid Configuration for Email ---
-# This replaces the old EMAIL_CONFIG dictionary.
-# Make sure you have these set in your .env file or environment variables.
-SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
-SENDGRID_FROM_EMAIL = os.getenv('SENDGRID_FROM_EMAIL')
+EMAIL_CONFIG = {
+    'user': os.getenv('EMAIL_USER'),
+    'password': os.getenv('EMAIL_PASSWORD'),
+    'server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
+    'port': int(os.getenv('SMTP_PORT', 587))
+}
 
-# --- Google Maps Geocoding API Key ---
 Maps_API_KEY = os.getenv('Maps_API_KEY')
 
 # --- Database Models ---
@@ -538,111 +533,99 @@ def create_location_map(latitude, longitude, user_name, accuracy=None):
         return None
 
 def send_emergency_email(email, user_name, message, latitude=None, longitude=None, accuracy=None):
-    """
-    Sends a formatted emergency alert email using the SendGrid API.
-    """
-    # 1. Check for SendGrid credentials first
-    if not SENDGRID_API_KEY or not SENDGRID_FROM_EMAIL:
-        logger.warning("SendGrid API Key or From Email is not configured. Cannot send email.")
-        return
+    try:
+        if not all([EMAIL_CONFIG['user'], EMAIL_CONFIG['password']]):
+            logger.warning("Email credentials not configured")
+            return
 
-    # 2. Gather all the necessary information for the email body
-    current_time = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S %Z')
-    address_info = "Not available"
-    if latitude is not None and longitude is not None:
-        address_details = get_detailed_address(latitude, longitude)
-        if address_details:
-            address_info = address_details['full_address']
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f'🚨 EMERGENCY ALERT - {user_name}'
+        msg['From'] = EMAIL_CONFIG['user']
+        msg['To'] = email
 
-    maps_link = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" if latitude is not None else ""
-    accuracy_info = f"Accuracy: {get_accuracy_description(accuracy)}" if accuracy is not None else ""
+        current_time = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+        address_info = get_detailed_address(latitude, longitude)['full_address'] if latitude and longitude else ""
+        maps_link = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}" if latitude and longitude else ""
+        maps_directions = f"https://www.google.com/maps/dir/?api=1&destination={latitude},{longitude}" if latitude and longitude else ""
+        accuracy_info = f"Accuracy: {get_accuracy_description(accuracy)}" if accuracy else ""
 
-    # 3. Create a more robust and mobile-friendly HTML content
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 12px; }}
-            .alert-box {{ background-color: #fff4f4; border-left: 6px solid #e53e3e; padding: 15px 20px; border-radius: 8px; }}
-            .alert-box h2 {{ margin-top: 0; color: #c53030; }}
-            .info-block {{ margin-top: 15px; }}
-            .info-block p {{ margin: 5px 0; }}
-            .actions {{ text-align: center; margin: 25px 0; }}
-            .map-link {{ display: inline-block; background-color: #3182ce; color: #ffffff !important; padding: 12px 20px; font-weight: bold; text-decoration: none; border-radius: 8px; }}
-            .footer {{ margin-top: 20px; font-size: 0.8em; color: #777; text-align: center; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .alert-box {{ background: #ffe6e6; border: 2px solid #ff4444; padding: 15px; border-radius: 8px; }}
+                .map-link {{ display: inline-block; background: #007bff; color: white; padding: 10px; text-decoration: none; border-radius: 5px; margin: 10px; }}
+                .emergency-info {{ background: #e9ecef; padding: 15px; border-radius: 8px; margin: 15px 0; }}
+            </style>
+        </head>
+        <body>
             <div class="alert-box">
                 <h2>🚨 EMERGENCY ALERT: {user_name}</h2>
-                <div class="info-block">
-                    <p><strong>Message:</strong> {message}</p>
-                    <p><strong>Time:</strong> {current_time}</p>
-                </div>
-                {f'''<div class="info-block">
-                    <p><strong>Approx. Location:</strong> {address_info}</p>
-                    <p><em>{accuracy_info}</em></p>
-                </div>''' if latitude is not None else ''}
+                <p><strong>Time:</strong> {current_time}</p>
+                <p><strong>Message:</strong> {message}</p>
+                {"<h3>Location</h3>" if latitude and longitude else ""}
+                {"<p>Latitude: " + str(latitude) + "</p>" if latitude else ""}
+                {"<p>Longitude: " + str(longitude) + "</p>" if longitude else ""}
+                {"<p>Address: " + address_info + "</p>" if address_info else ""}
+                {"<p>" + accuracy_info + "</p>" if accuracy_info else ""}
+                {"<div style='text-align: center;'>" if latitude and longitude else ""}
+                {"<a href='" + maps_link + "' class='map-link'>View on Google Maps</a>" if maps_link else ""}
+                {"<a href='" + maps_directions + "' class='map-link'>Get Directions</a>" if maps_directions else ""}
+                {"</div>" if latitude and longitude else ""}
             </div>
-
-            {f'''<div class="actions">
-                <a href="{maps_link}" class="map-link">View Location on Map</a>
-            </div>''' if maps_link else ''}
-
-            <div class="footer">
-                <p>This is an automated alert from the Womecare Safety App.</p>
+            <div class="emergency-info">
+                <h3>🆘 WHAT TO DO:</h3>
+                <ol>
+                    <li>Call {user_name} immediately</li>
+                    <li>If no response, contact emergency services:
+                        <ul>
+                            <li>Ambulance: 108</li>
+                            <li>Police: 100</li>
+                            <li>Fire: 101</li>
+                            <li>Women Helpline: 1091</li>
+                        </ul>
+                    </li>
+                    <li>Use location links to reach them</li>
+                </ol>
             </div>
-        </div>
-    </body>
-    </html>
-    """
+        </body>
+        </html>
+        """
 
-    # 4. Use the SendGrid Mail helper to build the message object
-    #    SendGrid automatically creates a plain-text version from the HTML.
-    message_obj = Mail(
-        from_email=SENDGRID_FROM_EMAIL,
-        to_emails=email,
-        subject=f'🚨 EMERGENCY ALERT from {user_name}',
-        html_content=html_content
-    )
+        text_content = f"""
+        EMERGENCY ALERT: {user_name}
+        Time: {current_time}
+        Message: {message}
+        {'Location:' if latitude and longitude else ''}
+        {f'Latitude: {latitude}' if latitude else ''}
+        {f'Longitude: {longitude}' if longitude else ''}
+        {f'Address: {address_info}' if address_info else ''}
+        {accuracy_info}
+        {maps_link}
+        """
 
-    # 5. Create and attach the interactive map file, if location is available
-    if latitude is not None and longitude is not None:
-        map_path = create_location_map(latitude, longitude, user_name, accuracy)
+        msg.attach(MIMEText(text_content, 'plain'))
+        msg.attach(MIMEText(html_content, 'html'))
+
+        map_path = create_location_map(latitude, longitude, user_name, accuracy) if latitude and longitude else None
         if map_path and os.path.exists(map_path):
-            with open(map_path, 'rb') as f:
-                data = f.read()
-            
-            # Files for SendGrid must be base64 encoded
-            encoded_file = base64.b64encode(data).decode()
-            
-            attached_file = Attachment(
-                file_content=FileContent(encoded_file),
-                file_name=FileName(os.path.basename(map_path)),
-                file_type=FileType('text/html'),
-                disposition=Disposition('attachment')
-            )
-            message_obj.attachment = attached_file
+            with open(map_path, 'rb') as attachment:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename={os.path.basename(map_path)}')
+            msg.attach(part)
 
-    # 6. Send the email using the SendGrid API client
-    try:
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sg.send(message_obj)
-        # A 2xx status code means the request was accepted.
-        if 200 <= response.status_code < 300:
-            logger.info(f"Emergency email accepted by SendGrid for {email}. Status: {response.status_code}")
-        else:
-            logger.error(f"SendGrid returned a non-success status code: {response.status_code}. Body: {response.body}")
+        with smtplib.SMTP(EMAIL_CONFIG['server'], EMAIL_CONFIG['port']) as server:
+            server.starttls()
+            server.login(EMAIL_CONFIG['user'], EMAIL_CONFIG['password'])
+            server.send_message(msg)
+
+        logger.info(f"Emergency email sent to {email}")
     except Exception as e:
-        logger.error(f"Failed to send email to {email} via SendGrid: {str(e)}")
-
-# (The rest of your app code follows...)
-
-
+        logger.error(f"Failed to send email to {email}: {str(e)}")
 
 def send_emergency_sms(phone, user_name, message, latitude=None, longitude=None, accuracy=None):
     try:
@@ -1057,103 +1040,94 @@ def trigger_sos(user_id):
                 location_data = validate_location_data(data)
             except ValueError as e:
                 logger.warning(f"Invalid SOS location data: {str(e)}")
-                # Set to None to indicate no valid location was provided
-                location_data = {'latitude': None, 'longitude': None, 'accuracy': None}
+                location_data = {'latitude': None, 'longitude': None, 'accuracy': None, 'is_high_accuracy': False}
         else:
-            # Fallback to the latest known location
             latest_location = db.session.query(LocationLog).filter_by(user_id=user_id).order_by(LocationLog.timestamp.desc()).first()
             if latest_location:
                 location_data = {
                     'latitude': latest_location.latitude,
                     'longitude': latest_location.longitude,
-                    'accuracy': latest_location.accuracy
+                    'accuracy': latest_location.accuracy,
+                    'is_high_accuracy': latest_location.is_high_accuracy
                 }
+
+        sos_alert_location_data = {
+            'latitude': location_data.get('latitude'),
+            'longitude': location_data.get('longitude'),
+            'accuracy': location_data.get('accuracy')
+        }
 
         sos_alert = SOSAlert(
             user_id=user_id,
             alert_type=data.get('alert_type', 'emergency'),
             message=data.get('message', 'Emergency assistance needed'),
             additional_info=json.dumps(data.get('additional_info', {})),
-            latitude=location_data.get('latitude'),
-            longitude=location_data.get('longitude'),
-            accuracy=location_data.get('accuracy')
+            **sos_alert_location_data
         )
         db.session.add(sos_alert)
         db.session.commit()
 
-        # --- Notification Logic ---
         contacts = db.session.query(EmergencyContact).filter_by(user_id=user_id).all() + \
-                   db.session.query(Guardian).filter_by(user_id=user_id).all()
+                     db.session.query(Guardian).filter_by(user_id=user_id).all()
         notifications = []
         errors = []
 
-        # Emit WebSocket event for real-time dashboards
-        alert_address = get_detailed_address(sos_alert.latitude, sos_alert.longitude)['full_address'] if sos_alert.latitude and sos_alert.longitude else 'Unknown Location'
-        socketio.emit('sos_alert', {
+        alert_data_for_socket = {
             'user_id': user.id,
             'name': user.name,
             'message': sos_alert.message,
+            'alert_id': sos_alert.id,
             'latitude': sos_alert.latitude,
             'longitude': sos_alert.longitude,
-            'address': alert_address,
+            'accuracy': sos_alert.accuracy,
+            'address': get_detailed_address(sos_alert.latitude, sos_alert.longitude)['full_address'] if sos_alert.latitude and sos_alert.longitude else 'Unknown Location',
             'timestamp': sos_alert.created_at.isoformat()
-        })
+        }
+
+        socketio.emit('sos_alert', alert_data_for_socket, room=str(user.id))
+        socketio.emit('sos_alert_global', alert_data_for_socket)
         logger.info(f"SOS alert emitted via Socket.IO for user {user.id}")
 
-        # Send notifications to all emergency contacts and guardians
         for contact in contacts:
             try:
                 notified = False
-                # Send SMS via Twilio
                 if contact.phone and all(TWILIO_CONFIG.values()):
                     send_emergency_sms(
                         contact.phone,
                         user.name,
                         sos_alert.message,
-                        latitude=sos_alert.latitude,
-                        longitude=sos_alert.longitude,
-                        accuracy=sos_alert.accuracy
+                        **sos_alert_location_data
                     )
                     notified = True
-
-                # --- THIS IS THE CORRECTED PART ---
-                # Send email via SendGrid
-                if contact.email and SENDGRID_API_KEY and SENDGRID_FROM_EMAIL:
+                if contact.email and all([EMAIL_CONFIG['user'], EMAIL_CONFIG['password']]):
                     send_emergency_email(
                         contact.email,
                         user.name,
                         sos_alert.message,
-                        latitude=sos_alert.latitude,
-                        longitude=sos_alert.longitude,
-                        accuracy=sos_alert.accuracy
+                        **sos_alert_location_data
                     )
                     notified = True
-                
                 if notified:
-                    notifications.append({'name': contact.name})
-
+                    notifications.append({'name': contact.name, 'type': contact.__class__.__name__.lower()})
             except Exception as e:
-                error_message = f"Failed to notify {contact.name}: {str(e)}"
-                errors.append(error_message)
-                logger.error(error_message)
+                errors.append(f"Failed to notify {contact.name}: {str(e)}")
+                logger.error(f"Notification error for {contact.name}: {str(e)}")
 
-        logger.info(f"SOS triggered for user {user.id}, {len(notifications)} notifications sent.")
-        
+        logger.info(f"SOS triggered for user {user.id}, notifications sent: {len(notifications)}")
         response = {
             'message': 'SOS triggered successfully',
             'alert_id': sos_alert.id,
             'notifications_sent': len(notifications),
-            'location_shared': bool(sos_alert.latitude and sos_alert.longitude)
+            'location_shared': bool(sos_alert.latitude and sos_alert.longitude),
+            'emergency_services': {'ambulance': '108', 'police': '100', 'fire': '101', 'women_helpline': '1091'}
         }
         if errors:
             response['notification_errors'] = errors
         return jsonify(response), 201
-
     except Exception as e:
         db.session.rollback()
-        logger.error(f"FATAL SOS trigger error for user {user_id}: {str(e)}")
-        return jsonify({'error': 'A critical error occurred while triggering the SOS alert.'}), 500
-
+        logger.error(f"SOS trigger error for user {user.id}: {str(e)}")
+        return jsonify({'error': f'Error triggering SOS: {str(e)}'}), 500
 
 # --- Period Tracker Endpoints ---
 @app.route('/api/period-tracker/<int:user_id>/log', methods=['POST'])

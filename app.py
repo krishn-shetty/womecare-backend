@@ -99,11 +99,7 @@ CORS(app, resources={
             "http://localhost:3000",
 
             # Production frontend (Vercel)
-            "https://womencare-frontend.vercel.app",
-
-            # Preview deployments
-            "https://womencare-frontend-git-main-krishnashetty8217-8376s-projects.vercel.app",
-            "https://womencare-frontend-ftv9w12vx-krishnashetty8217-8376s-projects.vercel.app"
+            "https://womencare-frontend.onrender.com"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
@@ -120,11 +116,7 @@ socketio = SocketIO(app, cors_allowed_origins=[
     "http://localhost:3000",
 
     # Production frontend
-    "https://womencare-frontend.vercel.app",
-
-    # Preview deployments
-    "https://womencare-frontend-git-main-krishnashetty8217-8376s-projects.vercel.app",
-    "https://womencare-frontend-ftv9w12vx-krishnashetty8217-8376s-projects.vercel.app"
+    "https://womencare-frontend.onrender.com"
 ])
 
 # Test root route to confirm server is running

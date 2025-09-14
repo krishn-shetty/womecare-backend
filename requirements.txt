@@ -88,4 +88,4 @@ python-engineio==4.9.1
 flask-migrate==4.0.7
 
 gevent==24.2.1
-sendgrid==6.11.0
+
